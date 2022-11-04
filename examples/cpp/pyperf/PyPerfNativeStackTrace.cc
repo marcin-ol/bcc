@@ -9,21 +9,29 @@
 #include <errno.h>
 #include <unistd.h>
 #include <cxxabi.h>
+#include <limits.h>
 
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <sstream>
 
 #include "PyPerfLoggingHelper.h"
+#include "bcc_syms.h"
+#include "syms.h"
 
 namespace ebpf {
 namespace pyperf {
+
+using std::unique_ptr;
 
 // Ideally it was preferable to save this as the context in libunwind accessors, but it's already used by UPT
 const uint8_t *NativeStackTrace::stack = NULL;
 size_t NativeStackTrace::stack_len = 0;
 uintptr_t NativeStackTrace::sp = 0;
 uintptr_t NativeStackTrace::ip = 0;
+ProcSymbolsCache NativeStackTrace::procSymbolsCache;
+bool NativeStackTrace::insert_dso_name = false;
 
 NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
                                    size_t stack_len, uintptr_t ip, uintptr_t sp) : error_occurred(false) {
@@ -39,6 +47,11 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
   unw_accessors_t my_accessors = _UPT_accessors;
   my_accessors.access_mem = NativeStackTrace::access_mem;
   my_accessors.access_reg = NativeStackTrace::access_reg;
+  char sym[256];
+  ProcSyms* procSymbols = nullptr;
+  // reserve memory for platform-defined path limit AND the symbol
+  size_t buf_size = sizeof(sym) + PATH_MAX + 4;
+  unique_ptr<char[]> buf(new char[buf_size]);
 
   // The UPT implementation of these functions uses ptrace. We want to make sure they aren't getting called
   my_accessors.access_fpreg = NULL;
@@ -65,23 +78,42 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
     goto out;
   }
 
+  static struct bcc_symbol_option symbol_options = {
+      .use_debug_file = 1,
+      .check_debug_file_crc = 1,
+      .lazy_symbolize = 1,
+      .use_symbol_type = BCC_SYM_ALL_TYPES
+    };
+  struct bcc_symbol resolved_symbol;
+  if (NativeStackTrace::insert_dso_name) {
+    if (!procSymbolsCache.count(pid)) {
+      procSymbolsCache[pid] = unique_ptr<ProcSyms>(new ProcSyms(pid, &symbol_options));
+    }
+    procSymbols = procSymbolsCache[pid].get();
+  }
+
   do {
     unw_word_t offset;
-    char sym[256];
-    char   *realname;
-    int     status;
-
     // TODO: This function is very heavy. We should try to do some caching here, maybe in the
     //       underlying UPT function.
     res = unw_get_proc_name(&cursor, sym, sizeof(sym), &offset);
     if (res == 0) {
-      realname = abi::__cxa_demangle(sym, NULL, NULL, &status);
-      if (status == 0) {
-        this->symbols.push_back(std::string(realname));
+      unw_word_t ip;
+      unw_get_reg(&cursor, UNW_REG_IP, &ip);
+      if (procSymbols && procSymbols->resolve_addr(ip, &resolved_symbol, true)) {
+        snprintf(buf.get(), buf_size, "%s (%s)", resolved_symbol.demangle_name, resolved_symbol.module);
+        this->symbols.push_back(std::string(buf.get()));
       } else {
-        this->symbols.push_back(std::string(sym));
+        int status = 0;
+        char* demangled = nullptr;
+        demangled = abi::__cxa_demangle(sym, nullptr, nullptr, &status);
+        if (!status) {
+          this->symbols.push_back(std::string(demangled));
+          free(demangled);
+        } else {
+          this->symbols.push_back(std::string(sym));
+        }
       }
-      free(realname);
     } else {
       unw_word_t ip;
       unw_get_reg(&cursor, UNW_REG_IP, &ip);
@@ -198,6 +230,17 @@ std::vector<std::string> NativeStackTrace::get_stack_symbol() const {
 
 bool NativeStackTrace::error_occured() const {
   return error_occurred;
+}
+
+void NativeStackTrace::prune_dead_pid(uint32_t dead_pid) {
+  auto it = procSymbolsCache.find(dead_pid);
+  if (it != procSymbolsCache.end()) {
+    procSymbolsCache.erase(it);
+  }
+}
+
+void NativeStackTrace::enable_dso_reporting() {
+  NativeStackTrace::insert_dso_name = true;
 }
 
 }  // namespace pyperf

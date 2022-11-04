@@ -166,7 +166,8 @@ void handleLostSamplesCallback(void* cb_cookie, uint64_t lost_cnt) {
 
 PyPerfProfiler::PyPerfResult PyPerfProfiler::init(unsigned int symbolsMapSize, unsigned int eventsBufferPages,
                                                   unsigned int kernelStacksMapSize, unsigned int userStacksPages,
-                                                  unsigned int fsOffset, unsigned int stackOffset) {
+                                                  unsigned int fsOffset, unsigned int stackOffset,
+                                                  bool insertDsoName) {
   std::vector<std::string> cflags;
   cflags.emplace_back(kNumCpusFlag + std::to_string(::sysconf(_SC_NPROCESSORS_ONLN)));
   cflags.emplace_back(kSymbolsHashSizeFlag + std::to_string(symbolsMapSize));
@@ -221,6 +222,9 @@ PyPerfProfiler::PyPerfResult PyPerfProfiler::init(unsigned int symbolsMapSize, u
   }
 
   eventsBufferPages_ = eventsBufferPages;
+  if (insertDsoName) {
+    NativeStackTrace::enable_dso_reporting();
+  }
   initCompleted_ = true;
   return PyPerfResult::SUCCESS;
 }
@@ -230,24 +234,26 @@ Populate the PidData BPF map.
 */
 bool PyPerfProfiler::populatePidTable() {
   bool result = false;
-
   // Populate config for each Python Process
   auto pid_config_map = bpf_.get_hash_table<int, PidData>(kPidCfgTableName);
-
   logInfo(3, "Pruning dead pids\n");
   auto pid_config_keys = pid_config_map.get_keys_offline();
   for (const auto pid : pid_config_keys) {
     auto pos = std::find(pids.begin(), pids.end(), pid);
     if (pos == pids.end()) {
+      // Remove dead pid from config map and native stack trace's cache
       pid_config_map.remove_value(pid);
+      NativeStackTrace::prune_dead_pid(pid);
     }
     else {
       result = true;
+      // To avoid re-population
       pids.erase(pos);
     }
   }
 
   logInfo(3, "Populating pid table\n");
+  // Populate only those pids not seen before
   for (const auto pid : pids) {
     PidData pidData;
 
@@ -256,10 +262,8 @@ bool PyPerfProfiler::populatePidTable() {
       continue;
     }
     pid_config_map.update_value(pid, pidData);
-
     result = true;
   }
-
   return result;
 }
 
