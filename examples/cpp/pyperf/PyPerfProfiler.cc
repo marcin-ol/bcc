@@ -178,6 +178,9 @@ PyPerfProfiler::PyPerfResult PyPerfProfiler::init(unsigned int symbolsMapSize, u
   cflags.emplace_back(kFsOffsetFlag + std::to_string(fsOffset));
   cflags.emplace_back(kStackOffsetFlag + std::to_string(stackOffset));
 
+  if (insertDsoName) {
+    NativeStackTrace::enable_dso_reporting();
+  }
   auto initRes = bpf_.init(PYPERF_BPF_PROGRAM, cflags);
   if (initRes.code() != 0) {
     std::fprintf(stderr, "Failed to compile PyPerf BPF programs: %s\n",
@@ -222,9 +225,6 @@ PyPerfProfiler::PyPerfResult PyPerfProfiler::init(unsigned int symbolsMapSize, u
   }
 
   eventsBufferPages_ = eventsBufferPages;
-  if (insertDsoName) {
-    NativeStackTrace::enable_dso_reporting();
-  }
   initCompleted_ = true;
   return PyPerfResult::SUCCESS;
 }

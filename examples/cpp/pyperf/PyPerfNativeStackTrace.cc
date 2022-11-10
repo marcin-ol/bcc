@@ -11,6 +11,7 @@
 #include <cxxabi.h>
 #include <limits.h>
 
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -32,6 +33,8 @@ uintptr_t NativeStackTrace::sp = 0;
 uintptr_t NativeStackTrace::ip = 0;
 ProcSymbolsCache NativeStackTrace::procSymbolsCache;
 bool NativeStackTrace::insert_dso_name = false;
+static std::chrono::time_point<std::chrono::steady_clock> startup_time_point = std::chrono::steady_clock::now();
+const static double ProcSymbolsCacheTTL_S = 60;
 
 NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
                                    size_t stack_len, uintptr_t ip, uintptr_t sp) : error_occurred(false) {
@@ -78,18 +81,9 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
     goto out;
   }
 
-  static struct bcc_symbol_option symbol_options = {
-      .use_debug_file = 1,
-      .check_debug_file_crc = 1,
-      .lazy_symbolize = 1,
-      .use_symbol_type = BCC_SYM_ALL_TYPES
-    };
   struct bcc_symbol resolved_symbol;
   if (NativeStackTrace::insert_dso_name) {
-    if (!procSymbolsCache.count(pid)) {
-      procSymbolsCache[pid] = unique_ptr<ProcSyms>(new ProcSyms(pid, &symbol_options));
-    }
-    procSymbols = procSymbolsCache[pid].get();
+    procSymbols = get_proc_symbols(pid);
   }
 
   do {
@@ -241,6 +235,26 @@ void NativeStackTrace::prune_dead_pid(uint32_t dead_pid) {
 
 void NativeStackTrace::enable_dso_reporting() {
   NativeStackTrace::insert_dso_name = true;
+}
+
+ProcSyms* NativeStackTrace::get_proc_symbols(uint32_t pid) {
+  static struct bcc_symbol_option symbol_options = {
+    .use_debug_file = 1,
+    .check_debug_file_crc = 1,
+    .lazy_symbolize = 1,
+    .use_symbol_type = BCC_SYM_ALL_TYPES
+  };
+  auto current_time_point = std::chrono::steady_clock::now();
+  double timestamp_s = std::chrono::duration_cast<std::chrono::duration<double>>(current_time_point - startup_time_point).count();
+  if (!procSymbolsCache.count(pid)) {
+    procSymbolsCache[pid] = ProcSymbolsCacheEntry{timestamp_s, unique_ptr<ProcSyms>(new ProcSyms(pid, &symbol_options))};
+  } else {
+    if (timestamp_s - procSymbolsCache[pid].timestamp_s > ProcSymbolsCacheTTL_S) {
+      procSymbolsCache[pid].proc_syms->refresh();
+      procSymbolsCache[pid].timestamp_s = timestamp_s;
+    }
+  }
+  return procSymbolsCache[pid].proc_syms.get();
 }
 
 }  // namespace pyperf

@@ -15,7 +15,12 @@
 namespace ebpf {
 namespace pyperf {
 
-typedef std::map<uint32_t, std::unique_ptr<ProcSyms>> ProcSymbolsCache;
+typedef struct {
+    double timestamp_s;
+    std::unique_ptr<ProcSyms> proc_syms;
+} ProcSymbolsCacheEntry;
+
+typedef std::map<uint32_t, ProcSymbolsCacheEntry> ProcSymbolsCache;
 
 class NativeStackTrace {
  public:
@@ -43,6 +48,7 @@ class NativeStackTrace {
 
   static int access_mem(unw_addr_space_t as, unw_word_t addr, unw_word_t *valp,
                         int write, void *arg);
+  static ProcSyms* get_proc_symbols(uint32_t pid);
 };
 
 }  // namespace pyperf
