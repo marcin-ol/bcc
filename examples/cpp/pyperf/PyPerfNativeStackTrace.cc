@@ -33,8 +33,11 @@ uintptr_t NativeStackTrace::sp = 0;
 uintptr_t NativeStackTrace::ip = 0;
 ProcSymbolsCache NativeStackTrace::procSymbolsCache;
 bool NativeStackTrace::insert_dso_name = false;
-static std::chrono::time_point<std::chrono::steady_clock> startup_time_point = std::chrono::steady_clock::now();
 const static double ProcSymbolsCacheTTL_S = 60;
+
+static double steady_time_since_epoch() {
+  return std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 
 NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
                                    size_t stack_len, uintptr_t ip, uintptr_t sp) : error_occurred(false) {
@@ -88,29 +91,22 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
 
   do {
     unw_word_t offset;
-    // TODO: This function is very heavy. We should try to do some caching here, maybe in the
-    //       underlying UPT function.
-    res = unw_get_proc_name(&cursor, sym, sizeof(sym), &offset);
-    if (res == 0) {
-      unw_word_t ip;
-      unw_get_reg(&cursor, UNW_REG_IP, &ip);
-      if (procSymbols && procSymbols->resolve_addr(ip, &resolved_symbol, true)) {
+    unw_word_t ip;
+    unw_get_reg(&cursor, UNW_REG_IP, &ip);
+    if (procSymbols && procSymbols->resolve_addr(ip, &resolved_symbol, true)) {
         snprintf(buf.get(), buf_size, "%s (%s)", resolved_symbol.demangle_name, resolved_symbol.module);
         this->symbols.push_back(std::string(buf.get()));
-      } else {
+    } else if (!unw_get_proc_name(&cursor, sym, sizeof(sym), &offset)) {
         int status = 0;
         char* demangled = nullptr;
         demangled = abi::__cxa_demangle(sym, nullptr, nullptr, &status);
         if (!status) {
           this->symbols.push_back(std::string(demangled));
-          free(demangled);
         } else {
           this->symbols.push_back(std::string(sym));
         }
-      }
+        free(demangled);
     } else {
-      unw_word_t ip;
-      unw_get_reg(&cursor, UNW_REG_IP, &ip);
       unw_word_t sp;
       unw_get_reg(&cursor, UNW_REG_SP, &sp);
       logInfo(2,
@@ -244,8 +240,7 @@ ProcSyms* NativeStackTrace::get_proc_symbols(uint32_t pid) {
     .lazy_symbolize = 1,
     .use_symbol_type = BCC_SYM_ALL_TYPES
   };
-  auto current_time_point = std::chrono::steady_clock::now();
-  double timestamp_s = std::chrono::duration_cast<std::chrono::duration<double>>(current_time_point - startup_time_point).count();
+  double timestamp_s = steady_time_since_epoch();
   if (!procSymbolsCache.count(pid)) {
     procSymbolsCache[pid] = ProcSymbolsCacheEntry{timestamp_s, unique_ptr<ProcSyms>(new ProcSyms(pid, &symbol_options))};
   } else {

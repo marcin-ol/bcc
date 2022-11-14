@@ -256,7 +256,6 @@ bool PyPerfProfiler::populatePidTable() {
   // Populate only those pids not seen before
   for (const auto pid : pids) {
     PidData pidData;
-
     if (!tryTargetPid(pid, pidData)) {
       // Not a Python Process
       continue;

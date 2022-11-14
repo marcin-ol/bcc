@@ -138,7 +138,7 @@ int main(int argc, char** argv) {
     found = found || parseStrArg({"-o", "--output"}, output);
     found = found || parseIntArg({"--fs-offset"}, fsOffset);
     found = found || parseIntArg({"--stack-offset"}, stackOffset);
-    found = found || parseFlag({"--do-insert-dso-name"}, insertDsoName);
+    found = found || parseFlag({"--insert-dso-name"}, insertDsoName);
     if (!found) {
       std::fprintf(stderr, "Unexpected argument: %s\n", argv[pos]);
       std::exit(1);
