@@ -56,8 +56,8 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
   char sym[256];
   ProcSyms* procSymbols = nullptr;
   // reserve memory for platform-defined path limit AND the symbol
-  size_t buf_size = sizeof(sym) + PATH_MAX + 4;
-  unique_ptr<char[]> buf(new char[buf_size]);
+  size_t buf_size = sizeof(sym) + PATH_MAX + sizeof("() ");
+  char buf[buf_size];
 
   // The UPT implementation of these functions uses ptrace. We want to make sure they aren't getting called
   my_accessors.access_fpreg = NULL;
@@ -94,8 +94,8 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
     unw_word_t ip;
     unw_get_reg(&cursor, UNW_REG_IP, &ip);
     if (procSymbols && procSymbols->resolve_addr(ip, &resolved_symbol, true)) {
-        snprintf(buf.get(), buf_size, "%s (%s)", resolved_symbol.demangle_name, resolved_symbol.module);
-        this->symbols.push_back(std::string(buf.get()));
+        snprintf(buf, buf_size, "%s (%s)", resolved_symbol.demangle_name, resolved_symbol.module);
+        this->symbols.push_back(std::string(buf));
     } else if (!unw_get_proc_name(&cursor, sym, sizeof(sym), &offset)) {
         int status = 0;
         char* demangled = nullptr;
