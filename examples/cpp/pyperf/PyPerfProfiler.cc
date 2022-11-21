@@ -234,8 +234,10 @@ Populate the PidData BPF map.
 */
 bool PyPerfProfiler::populatePidTable() {
   bool result = false;
+
   // Populate config for each Python Process
   auto pid_config_map = bpf_.get_hash_table<int, PidData>(kPidCfgTableName);
+
   logInfo(3, "Pruning dead pids\n");
   auto pid_config_keys = pid_config_map.get_keys_offline();
   for (const auto pid : pid_config_keys) {
@@ -256,13 +258,16 @@ bool PyPerfProfiler::populatePidTable() {
   // Populate only those pids not seen before
   for (const auto pid : pids) {
     PidData pidData;
+
     if (!tryTargetPid(pid, pidData)) {
       // Not a Python Process
       continue;
     }
     pid_config_map.update_value(pid, pidData);
+
     result = true;
   }
+
   return result;
 }
 
