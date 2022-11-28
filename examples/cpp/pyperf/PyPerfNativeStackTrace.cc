@@ -35,6 +35,9 @@ ProcSymbolsCache NativeStackTrace::procSymbolsCache;
 bool NativeStackTrace::insert_dso_name = false;
 const static double ProcSymbolsCacheTTL_S = 60;
 
+// external public symbol max size according to recommendation in c++ standard annex B
+const static int SymbolMaxSize = 1024;
+
 static double steady_time_since_epoch() {
   return std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
@@ -53,10 +56,9 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
   unw_accessors_t my_accessors = _UPT_accessors;
   my_accessors.access_mem = NativeStackTrace::access_mem;
   my_accessors.access_reg = NativeStackTrace::access_reg;
-  char sym[256];
   ProcSyms* procSymbols = nullptr;
   // reserve memory for platform-defined path limit AND the symbol
-  size_t buf_size = sizeof(sym) + PATH_MAX + sizeof("() ");
+  const size_t buf_size = SymbolMaxSize + PATH_MAX + sizeof("() ");
   char buf[buf_size];
 
   // The UPT implementation of these functions uses ptrace. We want to make sure they aren't getting called
@@ -84,7 +86,6 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
     goto out;
   }
 
-  struct bcc_symbol resolved_symbol;
   if (NativeStackTrace::insert_dso_name) {
     procSymbols = get_proc_symbols(pid);
   }
@@ -92,18 +93,21 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
   do {
     unw_word_t offset;
     unw_word_t ip;
+    struct bcc_symbol resolved_symbol;
     unw_get_reg(&cursor, UNW_REG_IP, &ip);
     if (procSymbols && procSymbols->resolve_addr(ip, &resolved_symbol, true)) {
         snprintf(buf, buf_size, "%s (%s)", resolved_symbol.demangle_name, resolved_symbol.module);
         this->symbols.push_back(std::string(buf));
-    } else if (!unw_get_proc_name(&cursor, sym, sizeof(sym), &offset)) {
+    // TODO: This function is very heavy. We should try to do some caching here, maybe in the
+    //       underlying UPT function.
+    } else if (!(res = unw_get_proc_name(&cursor, buf, sizeof(buf), &offset))) {
         int status = 0;
         char* demangled = nullptr;
-        demangled = abi::__cxa_demangle(sym, nullptr, nullptr, &status);
+        demangled = abi::__cxa_demangle(buf, nullptr, nullptr, &status);
         if (!status) {
           this->symbols.push_back(std::string(demangled));
         } else {
-          this->symbols.push_back(std::string(sym));
+          this->symbols.push_back(std::string(buf));
         }
         free(demangled);
     } else {
@@ -121,9 +125,9 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
     // Unwind only until we get to the function from which the current Python function is executed.
     // On Python3 the main loop function is called "_PyEval_EvalFrameDefault", and on Python2 it's
     // "PyEval_EvalFrameEx".
-    if (memcmp(sym, "_PyEval_EvalFrameDefault",
+    if (memcmp(buf, "_PyEval_EvalFrameDefault",
                 sizeof("_PyEval_EvalFrameDefault")) == 0 ||
-        memcmp(sym, "PyEval_EvalFrameEx", sizeof("PyEval_EvalFrameEx")) == 0)
+        memcmp(buf, "PyEval_EvalFrameEx", sizeof("PyEval_EvalFrameEx")) == 0)
         {
       break;
     }
@@ -234,7 +238,7 @@ void NativeStackTrace::enable_dso_reporting() {
 }
 
 ProcSyms* NativeStackTrace::get_proc_symbols(uint32_t pid) {
-  static struct bcc_symbol_option symbol_options = {
+  struct bcc_symbol_option symbol_options = {
     .use_debug_file = 1,
     .check_debug_file_crc = 1,
     .lazy_symbolize = 1,
