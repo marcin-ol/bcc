@@ -125,10 +125,9 @@ NativeStackTrace::NativeStackTrace(uint32_t pid, const unsigned char *raw_stack,
     // Unwind only until we get to the function from which the current Python function is executed.
     // On Python3 the main loop function is called "_PyEval_EvalFrameDefault", and on Python2 it's
     // "PyEval_EvalFrameEx".
-    if (memcmp(buf, "_PyEval_EvalFrameDefault",
-                sizeof("_PyEval_EvalFrameDefault")) == 0 ||
-        memcmp(buf, "PyEval_EvalFrameEx", sizeof("PyEval_EvalFrameEx")) == 0)
-        {
+    if (symbols.back().compare(0, strlen("_PyEval_EvalFrameDefault"), "_PyEval_EvalFrameDefault") == 0 ||
+        symbols.back().compare(0, strlen("PyEval_EvalFrameEx"), "PyEval_EvalFrameEx") == 0)
+    {
       break;
     }
   } while (unw_step(&cursor) > 0);
