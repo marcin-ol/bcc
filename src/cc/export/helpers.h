@@ -91,6 +91,7 @@ struct _name##_table_t { \
   int (*delete) (_key_type *); \
   void (*call) (void *, int index); \
   void (*increment) (_key_type, ...); \
+  void (*atomic_increment) (_key_type, ...); \
   int (*get_stackid) (void *, u64); \
   u32 max_entries; \
   int flags; \
@@ -367,8 +368,17 @@ struct _name##_table_t _name = { .max_entries = (_max_entries) }
 #define BPF_ARRAY_OF_MAPS(_name, _inner_map_name, _max_entries) \
   BPF_TABLE("array_of_maps$" _inner_map_name, int, int, _name, _max_entries)
 
-#define BPF_HASH_OF_MAPS(_name, _inner_map_name, _max_entries) \
-  BPF_TABLE("hash_of_maps$" _inner_map_name, int, int, _name, _max_entries)
+#define BPF_HASH_OF_MAPS2(_name, _inner_map_name) \
+  BPF_TABLE("hash_of_maps$" _inner_map_name, int, int, _name, 10240)
+#define BPF_HASH_OF_MAPS3(_name, _key_type, _inner_map_name) \
+  BPF_TABLE("hash_of_maps$" _inner_map_name, _key_type, int, _name, 10240)
+#define BPF_HASH_OF_MAPS4(_name, _key_type, _inner_map_name, _max_entries) \
+  BPF_TABLE("hash_of_maps$" _inner_map_name, _key_type, int, _name, _max_entries)
+
+#define BPF_HASH_OF_MAPSX(_name, _2, _3, _4, NAME, ...) NAME
+
+#define BPF_HASH_OF_MAPS(...) \
+  BPF_HASH_OF_MAPSX(__VA_ARGS__, BPF_HASH_OF_MAPS4, BPF_HASH_OF_MAPS3, BPF_HASH_OF_MAPS2)(__VA_ARGS__)
 
 #define BPF_SK_STORAGE(_name, _leaf_type) \
 struct _name##_table_t { \
@@ -387,7 +397,7 @@ struct _name##_table_t { \
   u32 key; \
   int leaf; \
   int (*update) (u32 *, int *); \
-  int (*delete) (int *); \
+  int (*delete) (u32 *); \
   /* ret = map.sock_map_update(ctx, key, flag) */ \
   int (* _helper_name) (void *, void *, u64); \
   u32 max_entries; \
@@ -399,8 +409,33 @@ BPF_ANNOTATE_KV_PAIR(_name, u32, int)
 #define BPF_SOCKMAP(_name, _max_entries) \
   BPF_SOCKMAP_COMMON(_name, _max_entries, "sockmap", sock_map_update)
 
-#define BPF_SOCKHASH(_name, _max_entries) \
-  BPF_SOCKMAP_COMMON(_name, _max_entries, "sockhash", sock_hash_update)
+#define BPF_SOCKHASH_COMMON(_name, _key_type, _max_entries) \
+struct _name##_table_t {\
+  _key_type key;\
+  int leaf; \
+  int (*update) (_key_type *, int *); \
+  int (*delete) (_key_type *); \
+  int (*sock_hash_update) (void *, void *, u64); \
+  int (*msg_redirect_hash) (void *, void *, u64); \
+  int (*sk_redirect_hash) (void *, void *, u64); \
+  u32 max_entries; \
+}; \
+__attribute__((section("maps/sockhash"))) \
+struct _name##_table_t _name = { .max_entries = (_max_entries) }; \
+BPF_ANNOTATE_KV_PAIR(_name, _key_type, int)
+
+#define BPF_SOCKHASH1(_name) \
+  BPF_SOCKHASH_COMMON(_name, u32, 10240)
+#define BPF_SOCKHASH2(_name, _key_type) \
+  BPF_SOCKHASH_COMMON(_name, _key_type, 10240)
+#define BPF_SOCKHASH3(_name, _key_type, _max_entries) \
+  BPF_SOCKHASH_COMMON(_name, _key_type, _max_entries)
+
+#define BPF_SOCKHASHX(_1, _2, _3, NAME, ...) NAME
+// We can define a five-tuple as the key, and basically never define the val type.
+// BPF_SOCKHASH(name, key_type=u64, size=10240)
+#define BPF_SOCKHASH(...) \
+  BPF_SOCKHASHX(__VA_ARGS__, BPF_SOCKHASH3, BPF_SOCKHASH2, BPF_SOCKHASH1)(__VA_ARGS__)
 
 #define BPF_CGROUP_STORAGE_COMMON(_name, _leaf_type, _kind) \
 struct _name##_table_t { \
@@ -824,6 +859,23 @@ static long (*bpf_for_each_map_elem)(void *map, void *callback_fn,
 static long (*bpf_snprintf)(char *str, __u32 str_size, const char *fmt,
                             __u64 *data, __u32 data_len) =
   (void *)BPF_FUNC_snprintf;
+
+static long (*bpf_sys_bpf)(__u32 cmd, void *attr, __u32 attr_size) =
+  (void *)BPF_FUNC_sys_bpf;
+static long (*bpf_btf_find_by_name_kind)(char *name, int name_sz, __u32 kind, int flags) =
+  (void *)BPF_FUNC_btf_find_by_name_kind;
+static long (*bpf_sys_close)(__u32 fd) = (void *)BPF_FUNC_sys_close;
+
+struct bpf_timer;
+static long (*bpf_timer_init)(struct bpf_timer *timer, void *map, __u64 flags) =
+  (void *)BPF_FUNC_timer_init;
+static long (*bpf_timer_set_callback)(struct bpf_timer *timer, void *callback_fn) =
+  (void *)BPF_FUNC_timer_set_callback;
+static long (*bpf_timer_start)(struct bpf_timer *timer, __u64 nsecs, __u64 flags) =
+  (void *)BPF_FUNC_timer_start;
+static long (*bpf_timer_cancel)(struct bpf_timer *timer) = (void *)BPF_FUNC_timer_cancel;
+
+static __u64 (*bpf_get_func_ip)(void *ctx) = (void *)BPF_FUNC_get_func_ip;
 
 /* llvm builtin functions that eBPF C program may use to
  * emit BPF_LD_ABS and BPF_LD_IND instructions

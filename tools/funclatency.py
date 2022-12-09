@@ -143,10 +143,8 @@ int trace_func_return(struct pt_regs *ctx)
 
     u32 lat = 0;
     u32 cnt = 1;
-    u64 *sum = avg.lookup(&lat);
-    if (sum) lock_xadd(sum, delta);
-    u64 *cnts = avg.lookup(&cnt);
-    if (cnts) lock_xadd(cnts, 1);
+    avg.atomic_increment(lat, delta);
+    avg.atomic_increment(cnt);
 
     FACTOR
 
@@ -286,7 +284,7 @@ static inline int stack_push(func_stack_t *stack, func_cache_t *cache) {
     key.key.ip  = ip;
     key.key.pid = %s;
     key.slot    = bpf_log2l(delta);
-    dist.increment(key);
+    dist.atomic_increment(key);
 
     if (stack->head == 0) {
         /* empty */
@@ -311,7 +309,7 @@ static inline int stack_push(func_stack_t *stack, func_cache_t *cache) {
         key.key.ip = ip;
         key.key.pid = %s;
         key.slot = bpf_log2l(delta);
-        dist.increment(key);
+        dist.atomic_increment(key);
         ipaddr.delete(&pid);
     }
                 """ % pid)
@@ -320,7 +318,7 @@ else:
                                            'BPF_HASH(start, u32);')
     bpf_text = bpf_text.replace('ENTRYSTORE', 'start.update(&pid, &ts);')
     bpf_text = bpf_text.replace('STORE',
-        'dist.increment(bpf_log2l(delta));')
+        'dist.atomic_increment(bpf_log2l(delta));')
 
 bpf_text = bpf_text.replace('TYPEDEF', '')
 bpf_text = bpf_text.replace('FUNCTION', '')
