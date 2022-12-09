@@ -314,6 +314,8 @@ class TableBase(MutableMapping):
         self.flags = lib.bpf_table_flags_id(self.bpf.module, self.map_id)
         self._cbs = {}
         self._name = name
+        self.max_entries = int(lib.bpf_table_max_entries_id(self.bpf.module,
+                self.map_id))
 
     def get_fd(self):
         return self.map_fd
@@ -396,6 +398,92 @@ class TableBase(MutableMapping):
         # default clear uses popitem, which can race with the bpf prog
         for k in self.keys():
             self.__delitem__(k)
+
+    def items_lookup_batch(self):
+        # batch size is set to the maximum
+        batch_size = self.max_entries
+        out_batch = ct.c_uint32(0)
+        keys = (type(self.Key()) * batch_size)()
+        values = (type(self.Leaf()) * batch_size)()
+        count = ct.c_uint32(batch_size)
+        res = lib.bpf_lookup_batch(self.map_fd,
+                                   None,
+                                   ct.byref(out_batch),
+                                   ct.byref(keys),
+                                   ct.byref(values),
+                                   ct.byref(count)
+                                   )
+
+        errcode = ct.get_errno()
+        if (errcode == errno.EINVAL):
+            raise Exception("BPF_MAP_LOOKUP_BATCH is invalid.")
+
+        if (res != 0 and errcode != errno.ENOENT):
+            raise Exception("BPF_MAP_LOOKUP_BATCH has failed")
+
+        for i in range(0, count.value):
+            yield (keys[i], values[i])
+
+    def items_delete_batch(self, keys=None):
+        """Delete all the key-value pairs in the map if no key are given.
+        In that case, it is faster to call lib.bpf_lookup_and_delete_batch than
+        create keys list and then call lib.bpf_delete_batch on these keys.
+        If the array of keys is given then it deletes the related key-value.
+        """
+        if keys is not None:
+            # a ct.Array is expected
+            if not isinstance(keys, ct.Array):
+                raise TypeError
+
+            batch_size = len(keys)
+
+            # check that batch between limits and coherent with the provided values
+            if batch_size < 1 or batch_size > self.max_entries:
+                raise KeyError
+
+            count = ct.c_uint32(batch_size)
+
+            res = lib.bpf_delete_batch(self.map_fd,
+                                       ct.byref(keys),
+                                       ct.byref(count)
+                                       )
+            errcode = ct.get_errno()
+            if (errcode == errno.EINVAL):
+                raise Exception("BPF_MAP_DELETE_BATCH is invalid.")
+
+            if (res != 0 and errcode != errno.ENOENT):
+                raise Exception("BPF_MAP_DELETE_BATCH has failed")
+        else:
+            for _ in self.items_lookup_and_delete_batch():
+                return
+
+    def items_update_batch(self, keys, values):
+        """Update all the key-value pairs in the map provided.
+        The lists must be the same length, between 1 and the maximum number of entries.
+        """
+        # two ct.Array are expected
+        if not isinstance(keys, ct.Array) or not isinstance(values, ct.Array):
+            raise TypeError
+
+        batch_size = len(keys)
+
+        # check that batch between limits and coherent with the provided values
+        if batch_size < 1 or batch_size > self.max_entries or batch_size != len(values):
+            raise KeyError
+
+        count = ct.c_uint32(batch_size)
+        res = lib.bpf_update_batch(self.map_fd,
+                                   ct.byref(keys),
+                                   ct.byref(values),
+                                   ct.byref(count)
+                                   )
+
+        errcode = ct.get_errno()
+        if (errcode == errno.EINVAL):
+            raise Exception("BPF_MAP_UPDATE_BATCH is invalid.")
+
+        if (res != 0 and errcode != errno.ENOENT):
+            raise Exception("BPF_MAP_UPDATE_BATCH has failed")
 
     def items_lookup_and_delete_batch(self):
         # batch size is set to the maximum
@@ -609,9 +697,7 @@ class TableBase(MutableMapping):
 class HashTable(TableBase):
     def __init__(self, *args, **kwargs):
         super(HashTable, self).__init__(*args, **kwargs)
-        self.max_entries = int(lib.bpf_table_max_entries_id(self.bpf.module,
-                                                            self.map_id))
-
+        
     def __len__(self):
         i = 0
         for k in self: i += 1
@@ -624,9 +710,7 @@ class LruHash(HashTable):
 class ArrayBase(TableBase):
     def __init__(self, *args, **kwargs):
         super(ArrayBase, self).__init__(*args, **kwargs)
-        self.max_entries = int(lib.bpf_table_max_entries_id(self.bpf.module,
-                self.map_id))
-
+        
     def _normalize_key(self, key):
         if isinstance(key, int):
             if key < 0:
@@ -1096,6 +1180,8 @@ class QueueStack:
         self.Leaf = leaftype
         self.ttype = lib.bpf_table_type_id(self.bpf.module, self.map_id)
         self.flags = lib.bpf_table_flags_id(self.bpf.module, self.map_id)
+        self.max_entries = int(lib.bpf_table_max_entries_id(self.bpf.module,
+                self.map_id))
 
     def leaf_sprintf(self, leaf):
         buf = ct.create_string_buffer(ct.sizeof(self.Leaf) * 8)
@@ -1132,3 +1218,16 @@ class QueueStack:
         if res < 0:
             raise KeyError("Could not peek table")
         return leaf
+    
+    def itervalues(self):
+        # to avoid infinite loop, set maximum pops to max_entries
+        cnt = self.max_entries
+        while cnt:
+            try:
+                yield(self.pop())
+                cnt -= 1
+            except KeyError:
+                return
+
+    def values(self):
+        return [value for value in self.itervalues()]

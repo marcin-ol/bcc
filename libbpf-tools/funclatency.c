@@ -41,7 +41,8 @@ static struct prog_env {
 };
 
 const char *argp_program_version = "funclatency 0.1";
-const char *argp_program_bug_address = "<bpf@vger.kernel.org>";
+const char *argp_program_bug_address =
+	"https://github.com/iovisor/bcc/tree/master/libbpf-tools";
 static const char args_doc[] = "FUNCTION";
 static const char program_doc[] =
 "Time functions and print latency as a histogram\n"
@@ -274,7 +275,7 @@ int main(int argc, char **argv)
 		.doc = program_doc,
 	};
 	struct funclatency_bpf *obj;
-	int err;
+	int i, err;
 	struct tm *tm;
 	char ts[32];
 	time_t t;
@@ -312,7 +313,7 @@ int main(int argc, char **argv)
 
 	printf("Tracing %s.  Hit Ctrl-C to exit\n", env.funcname);
 
-	for (int i = 0; i < env.iterations && !exiting; i++) {
+	for (i = 0; i < env.iterations && !exiting; i++) {
 		sleep(env.interval);
 
 		printf("\n");

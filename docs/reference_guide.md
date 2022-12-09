@@ -39,11 +39,12 @@ This guide is incomplete. If something feels missing, check the bcc and kernel s
         - [1. bpf_trace_printk()](#1-bpf_trace_printk)
         - [2. BPF_PERF_OUTPUT](#2-bpf_perf_output)
         - [3. perf_submit()](#3-perf_submit)
-        - [4. BPF_RINGBUF_OUTPUT](#4-bpf_ringbuf_output)
-        - [5. ringbuf_output()](#5-ringbuf_output)
-        - [6. ringbuf_reserve()](#6-ringbuf_reserve)
-        - [7. ringbuf_submit()](#7-ringbuf_submit)
-        - [8. ringbuf_discard()](#8-ringbuf_submit)
+        - [4. perf_submit_skb()](#4-perf_submit_skb)
+        - [5. BPF_RINGBUF_OUTPUT](#5-bpf_ringbuf_output)
+        - [6. ringbuf_output()](#6-ringbuf_output)
+        - [7. ringbuf_reserve()](#7-ringbuf_reserve)
+        - [8. ringbuf_submit()](#8-ringbuf_submit)
+        - [9. ringbuf_discard()](#9-ringbuf_submit)
     - [Maps](#maps)
         - [1. BPF_TABLE](#1-bpf_table)
         - [2. BPF_HASH](#2-bpf_hash)
@@ -104,12 +105,15 @@ This guide is incomplete. If something feels missing, check the bcc and kernel s
         - [4. values()](#4-values)
         - [5. clear()](#5-clear)
         - [6. items_lookup_and_delete_batch()](#6-items_lookup_and_delete_batch)
-        - [7. print_log2_hist()](#7-print_log2_hist)
-        - [8. print_linear_hist()](#8-print_linear_hist)
-        - [9. open_ring_buffer()](#9-open_ring_buffer)
-        - [10. push()](#10-push)
-        - [11. pop()](#11-pop)
-        - [12. peek()](#12-peek)
+        - [7. items_lookup_batch()](#7-items_lookup_batch)
+        - [8. items_delete_batch()](#8-items_delete_batch)
+        - [9. items_update_batch()](#9-items_update_batch)
+        - [10. print_log2_hist()](#10-print_log2_hist)
+        - [11. print_linear_hist()](#11-print_linear_hist)
+        - [12. open_ring_buffer()](#12-open_ring_buffer)
+        - [13. push()](#13-push)
+        - [14. pop()](#14-pop)
+        - [15. peek()](#15-peek)
     - [Helpers](#helpers)
         - [1. ksym()](#1-ksym)
         - [2. ksymname()](#2-ksymname)
@@ -710,7 +714,19 @@ Examples in situ:
 [search /examples](https://github.com/iovisor/bcc/search?q=perf_submit+path%3Aexamples&type=Code),
 [search /tools](https://github.com/iovisor/bcc/search?q=perf_submit+path%3Atools&type=Code)
 
-### 4. BPF_RINGBUF_OUTPUT
+### 4. perf_submit_skb()
+
+Syntax: ```int perf_submit_skb((void *)ctx, u32 packet_size, (void *)data, u32 data_size)```
+
+Return: 0 on success
+
+A method of a BPF_PERF_OUTPUT table available in networking program types, for submitting custom event data to user space, along with the first ```packet_size``` bytes of the packet buffer. See the BPF_PERF_OUTPUT entry. (This ultimately calls bpf_perf_event_output().)
+
+Examples in situ:
+[search /examples](https://github.com/iovisor/bcc/search?q=perf_submit_skb+path%3Aexamples&type=Code),
+[search /tools](https://github.com/iovisor/bcc/search?q=perf_submit_skb+path%3Atools&type=Code)
+
+### 5. BPF_RINGBUF_OUTPUT
 
 Syntax: ```BPF_RINGBUF_OUTPUT(name, page_cnt)```
 
@@ -774,7 +790,7 @@ The output table is named ```events```. Data is allocated via ```events.ringbuf_
 Examples in situ: <!-- TODO -->
 [search /examples](https://github.com/iovisor/bcc/search?q=BPF_RINGBUF_OUTPUT+path%3Aexamples&type=Code),
 
-### 5. ringbuf_output()
+### 6. ringbuf_output()
 
 Syntax: ```int ringbuf_output((void *)data, u64 data_size, u64 flags)```
 
@@ -790,7 +806,7 @@ although it does not require a ctx argument.
 Examples in situ: <!-- TODO -->
 [search /examples](https://github.com/iovisor/bcc/search?q=ringbuf_output+path%3Aexamples&type=Code),
 
-### 6. ringbuf_reserve()
+### 7. ringbuf_reserve()
 
 Syntax: ```void* ringbuf_reserve(u64 data_size)```
 
@@ -802,7 +818,7 @@ allocating a data struct for output. Must be used with one of ```ringbuf_submit`
 Examples in situ: <!-- TODO -->
 [search /examples](https://github.com/iovisor/bcc/search?q=ringbuf_reserve+path%3Aexamples&type=Code),
 
-### 7. ringbuf_submit()
+### 8. ringbuf_submit()
 
 Syntax: ```void ringbuf_submit((void *)data, u64 flags)```
 
@@ -818,7 +834,7 @@ A method of the BPF_RINGBUF_OUTPUT table, for submitting custom event data to us
 Examples in situ: <!-- TODO -->
 [search /examples](https://github.com/iovisor/bcc/search?q=ringbuf_submit+path%3Aexamples&type=Code),
 
-### 8. ringbuf_discard()
+### 9. ringbuf_discard()
 
 Syntax: ```void ringbuf_discard((void *)data, u64 flags)```
 
@@ -855,8 +871,9 @@ Examples in situ:
 
 #### Pinned Maps
 
-Maps that were pinned to the BPF filesystem can be accessed through an extended syntax: ```BPF_TABLE_PINNED(_table_type, _key_type, _leaf_type, _name, _max_entries, "/sys/fs/bpf/xyz")```
-The type information is not enforced and the actual map type depends on the map that got pinned to the location.
+Syntax: ```BPF_TABLE_PINNED(_table_type, _key_type, _leaf_type, _name, _max_entries, "/sys/fs/bpf/xyz")```
+
+Create a new map if it doesn't exist and pin it to the bpffs as a FILE, otherwise use the map that was pinned to the bpffs. The type information is not enforced and the actual map type depends on the map that got pinned to the location.
 
 For example:
 
@@ -1672,7 +1689,7 @@ This is an explicit way to instrument tracepoints. The ```RAW_TRACEPOINT_PROBE``
 For example:
 
 ```Python
-b.attach_raw_tracepoint("sched_swtich", "do_trace")
+b.attach_raw_tracepoint("sched_switch", "do_trace")
 ```
 
 Examples in situ:
@@ -1948,7 +1965,7 @@ Examples in situ:
 Syntax: ```table.items_lookup_and_delete_batch()```
 
 Returns an array of the keys in a table with a single call to BPF syscall. This can be used with BPF_HASH maps to fetch, and iterate, over the keys. It also clears the table: deletes all entries.
-You should rather use table.items_lookup_and_delete_batch() than table.items() followed by table.clear().
+You should rather use table.items_lookup_and_delete_batch() than table.items() followed by table.clear(). It requires kernel v5.6.
 
 Example:
 
@@ -1961,7 +1978,48 @@ while True:
     sleep(1)
 ```
 
-### 7. print_log2_hist()
+### 7. items_lookup_batch()
+
+Syntax: ```table.items_lookup_batch()```
+
+Returns an array of the keys in a table with a single call to BPF syscall. This can be used with BPF_HASH maps to fetch, and iterate, over the keys.
+You should rather use table.items_lookup_batch() than table.items(). It requires kernel v5.6.
+
+Example:
+
+```Python
+# print current value of map:
+print("%9s-%9s-%8s-%9s" % ("PID", "COMM", "fname", "counter"))
+while True:
+    for k, v in sorted(b['map'].items_lookup_batch(), key=lambda kv: (kv[0]).pid):
+        print("%9s-%9s-%8s-%9d" % (k.pid, k.comm, k.fname, v.counter))
+```
+
+### 8. items_delete_batch()
+
+Syntax: ```table.items_delete_batch(keys)```
+
+Arguments:
+
+- keys is optional and by default is None.
+In that case, it clears all entries of a BPF_HASH map when keys is None. It is more efficient than table.clear() since it generates only one system call.
+If a list of keys is given then only those keys and their associated values will be deleted.
+It requires kernel v5.6.
+
+
+### 9. items_update_batch()
+
+Syntax: ```table.items_update_batch(keys, values)```
+
+Update all the provided keys with new values. The two arguments must be the same length and within the map limits (between 1 and the maximum entries).
+
+Arguments:
+
+- keys is the list of keys to be updated
+- values is the list containing the new values.
+
+
+### 10. print_log2_hist()
 
 Syntax: ```table.print_log2_hist(val_type="value", section_header="Bucket ptr", section_print_fn=None)```
 
@@ -2012,7 +2070,7 @@ Examples in situ:
 [search /examples](https://github.com/iovisor/bcc/search?q=print_log2_hist+path%3Aexamples+language%3Apython&type=Code),
 [search /tools](https://github.com/iovisor/bcc/search?q=print_log2_hist+path%3Atools+language%3Apython&type=Code)
 
-### 8. print_linear_hist()
+### 11. print_linear_hist()
 
 Syntax: ```table.print_linear_hist(val_type="value", section_header="Bucket ptr", section_print_fn=None)```
 
@@ -2071,7 +2129,7 @@ Examples in situ:
 [search /examples](https://github.com/iovisor/bcc/search?q=print_linear_hist+path%3Aexamples+language%3Apython&type=Code),
 [search /tools](https://github.com/iovisor/bcc/search?q=print_linear_hist+path%3Atools+language%3Apython&type=Code)
 
-### 9. open_ring_buffer()
+### 12. open_ring_buffer()
 
 Syntax: ```table.open_ring_buffer(callback, ctx=None)```
 
@@ -2133,7 +2191,7 @@ def print_event(ctx, data, size):
 Examples in situ:
 [search /examples](https://github.com/iovisor/bcc/search?q=open_ring_buffer+path%3Aexamples+language%3Apython&type=Code),
 
-### 10. push()
+### 13. push()
 
 Syntax: ```table.push(leaf, flags=0)```
 
@@ -2143,7 +2201,7 @@ Passing QueueStack.BPF_EXIST as a flag causes the Queue or Stack to discard the 
 Examples in situ:
 [search /tests](https://github.com/iovisor/bcc/search?q=push+path%3Atests+language%3Apython&type=Code),
 
-### 11. pop()
+### 14. pop()
 
 Syntax: ```leaf = table.pop()```
 
@@ -2154,7 +2212,7 @@ Raises a KeyError exception if the operation does not succeed.
 Examples in situ:
 [search /tests](https://github.com/iovisor/bcc/search?q=pop+path%3Atests+language%3Apython&type=Code),
 
-### 12. peek()
+### 15. peek()
 
 Syntax: ```leaf = table.peek()```
 

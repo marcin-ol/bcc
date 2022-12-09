@@ -815,6 +815,15 @@ static long (*bpf_ima_inode_hash)(struct inode *inode, void *dst, __u32 size) =
 struct file;
 static struct socket *(*bpf_sock_from_file)(struct file *file) =
   (void *)BPF_FUNC_sock_from_file;
+static long (*bpf_check_mtu)(void *ctx, __u32 ifindex, __u32 *mtu_len,
+                             __s32 len_diff, __u64 flags) =
+  (void *)BPF_FUNC_check_mtu;
+static long (*bpf_for_each_map_elem)(void *map, void *callback_fn,
+                                     void *callback_ctx, __u64 flags) =
+  (void *)BPF_FUNC_for_each_map_elem;
+static long (*bpf_snprintf)(char *str, __u32 str_size, const char *fmt,
+                            __u64 *data, __u32 data_len) =
+  (void *)BPF_FUNC_snprintf;
 
 /* llvm builtin functions that eBPF C program may use to
  * emit BPF_LD_ABS and BPF_LD_IND instructions
@@ -1071,6 +1080,9 @@ int bpf_usdt_readarg_p(int argc, struct pt_regs *ctx, void *buf, u64 len) asm("l
 #elif defined(__TARGET_ARCH_powerpc)
 #define bpf_target_powerpc
 #define bpf_target_defined
+#elif defined(__TARGET_ARCH_mips)
+#define bpf_target_mips
+#define bpf_target_defined
 #else
 #undef bpf_target_defined
 #endif
@@ -1085,6 +1097,8 @@ int bpf_usdt_readarg_p(int argc, struct pt_regs *ctx, void *buf, u64 len) asm("l
 #define bpf_target_arm64
 #elif defined(__powerpc__)
 #define bpf_target_powerpc
+#elif defined(__mips__)
+#define bpf_target_mips
 #endif
 #endif
 
@@ -1133,6 +1147,18 @@ int bpf_usdt_readarg_p(int argc, struct pt_regs *ctx, void *buf, u64 len) asm("l
 #define PT_REGS_RC(x)		((x)->regs[0])
 #define PT_REGS_SP(x)		((x)->sp)
 #define PT_REGS_IP(x)		((x)->pc)
+#elif defined(bpf_target_mips)
+#define PT_REGS_PARM1(x) ((x)->regs[4])
+#define PT_REGS_PARM2(x) ((x)->regs[5])
+#define PT_REGS_PARM3(x) ((x)->regs[6])
+#define PT_REGS_PARM4(x) ((x)->regs[7])
+#define PT_REGS_PARM5(x) ((x)->regs[8])
+#define PT_REGS_PARM6(x) ((x)->regs[9])
+#define PT_REGS_RET(x) ((x)->regs[31])
+#define PT_REGS_FP(x) ((x)->regs[30]) /* Works only with CONFIG_FRAME_POINTER */
+#define PT_REGS_RC(x) ((x)->regs[2])
+#define PT_REGS_SP(x) ((x)->regs[29])
+#define PT_REGS_IP(x) ((x)->cp0_epc)
 #else
 #error "bcc does not support this platform yet"
 #endif
