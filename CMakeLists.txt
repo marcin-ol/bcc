@@ -11,6 +11,12 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
+if(CMAKE_SANITIZE_TYPE)
+    add_compile_options(-fsanitize=${CMAKE_SANITIZE_TYPE})
+    add_link_options(-fsanitize=${CMAKE_SANITIZE_TYPE})
+endif()
+
+
 if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
   set(CMAKE_INSTALL_PREFIX "/usr" CACHE PATH "path to install" FORCE)
 endif()
@@ -19,6 +25,25 @@ enable_testing()
 
 # populate submodules (libbpf)
 if(NOT CMAKE_USE_LIBBPF_PACKAGE)
+   execute_process(COMMAND git config --global --add safe.directory ${CMAKE_CURRENT_SOURCE_DIR}
+                   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                   RESULT_VARIABLE CONFIG_RESULT)
+   if(CONFIG_RESULT AND NOT CONFIG_RESULT EQUAL 0)
+     message(WARNING "Failed to add root source directory to safe.directory")
+   endif()
+   execute_process(COMMAND git config --global --add safe.directory ${CMAKE_CURRENT_SOURCE_DIR}/src/cc/libbpf
+                   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                   RESULT_VARIABLE CONFIG_RESULT)
+   if(CONFIG_RESULT AND NOT CONFIG_RESULT EQUAL 0)
+     message(WARNING "Failed to add libbpf source directory to safe.directory")
+   endif()
+   execute_process(COMMAND git config --global --add safe.directory ${CMAKE_CURRENT_SOURCE_DIR}/libbpf-tools/bpftool
+                   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                   RESULT_VARIABLE CONFIG_RESULT)
+   if(CONFIG_RESULT AND NOT CONFIG_RESULT EQUAL 0)
+     message(WARNING "Failed to add bpftool source directory to safe.directory")
+   endif()
+
    if(NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/src/cc/libbpf/src)
 	execute_process(COMMAND git submodule update --init --recursive
                   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
@@ -106,6 +131,9 @@ find_library(libclangRewrite NAMES clangRewrite clang-cpp HINTS ${CLANG_SEARCH})
 find_library(libclangSema NAMES clangSema clang-cpp HINTS ${CLANG_SEARCH})
 find_library(libclangSerialization NAMES clangSerialization clang-cpp HINTS ${CLANG_SEARCH})
 find_library(libclangASTMatchers NAMES clangASTMatchers clang-cpp HINTS ${CLANG_SEARCH})
+if (${LLVM_PACKAGE_VERSION} VERSION_EQUAL 15 OR ${LLVM_PACKAGE_VERSION} VERSION_GREATER 15)
+  find_library(libclangSupport NAMES clangSupport clang-cpp HINTS ${CLANG_SEARCH})
+endif()
 find_library(libclang-shared libclang-cpp.so HINTS ${CLANG_SEARCH})
 if(libclangBasic STREQUAL "libclangBasic-NOTFOUND")
   message(FATAL_ERROR "Unable to find clang libraries")
@@ -139,7 +167,11 @@ if (USINGISYSTEM AND GCC_VERSION VERSION_LESS 6.0)
 endif()
 
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_STANDARD 14)
+if (${LLVM_PACKAGE_VERSION} VERSION_EQUAL 16 OR ${LLVM_PACKAGE_VERSION} VERSION_GREATER 16)
+  set(CMAKE_CXX_STANDARD 17)
+else()
+  set(CMAKE_CXX_STANDARD 14)
+endif()
 
 endif(NOT PYTHON_ONLY)
 

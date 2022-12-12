@@ -60,6 +60,13 @@ const char *calling_conv_regs_arm64[] = {"regs[0]", "regs[1]", "regs[2]",
 const char *calling_conv_regs_mips[] = {"regs[4]", "regs[5]", "regs[6]",
                                        "regs[7]", "regs[8]", "regs[9]"};
 
+const char *calling_conv_regs_riscv64[] = {"a0", "a1", "a2",
+                                       "a3", "a4", "a5"};
+
+const char *calling_conv_regs_loongarch[] = {"regs[4]", "regs[5]", "regs[6]",
+					     "regs[7]", "regs[8]", "regs[9]"};
+
+
 void *get_call_conv_cb(bcc_arch_t arch, bool for_syscall)
 {
   const char **ret;
@@ -77,6 +84,12 @@ void *get_call_conv_cb(bcc_arch_t arch, bool for_syscall)
       break;
     case BCC_ARCH_MIPS:
       ret = calling_conv_regs_mips;
+      break;
+    case BCC_ARCH_RISCV64:
+      ret = calling_conv_regs_riscv64;
+      break;
+    case BCC_ARCH_LOONGARCH:
+      ret = calling_conv_regs_loongarch;
       break;
     default:
       if (for_syscall)
@@ -330,7 +343,7 @@ ProbeVisitor::ProbeVisitor(ASTContext &C, Rewriter &rewriter,
   C(C), rewriter_(rewriter), m_(m), ctx_(nullptr), track_helpers_(track_helpers),
   addrof_stmt_(nullptr), is_addrof_(false) {
   const char **calling_conv_regs = get_call_conv();
-  has_overlap_kuaddr_ = calling_conv_regs == calling_conv_regs_s390x;
+  cannot_fall_back_safely = (calling_conv_regs == calling_conv_regs_s390x || calling_conv_regs == calling_conv_regs_riscv64);
 }
 
 bool ProbeVisitor::assignsExtPtr(Expr *E, int *nbDerefs) {
@@ -503,7 +516,7 @@ bool ProbeVisitor::VisitUnaryOperator(UnaryOperator *E) {
   memb_visited_.insert(E);
   string pre, post;
   pre = "({ typeof(" + E->getType().getAsString() + ") _val; __builtin_memset(&_val, 0, sizeof(_val));";
-  if (has_overlap_kuaddr_)
+  if (cannot_fall_back_safely)
     pre += " bpf_probe_read_kernel(&_val, sizeof(_val), (u64)";
   else
     pre += " bpf_probe_read(&_val, sizeof(_val), (u64)";
@@ -567,7 +580,7 @@ bool ProbeVisitor::VisitMemberExpr(MemberExpr *E) {
   string base_type = base->getType()->getPointeeType().getAsString();
   string pre, post;
   pre = "({ typeof(" + E->getType().getAsString() + ") _val; __builtin_memset(&_val, 0, sizeof(_val));";
-  if (has_overlap_kuaddr_)
+  if (cannot_fall_back_safely)
     pre += " bpf_probe_read_kernel(&_val, sizeof(_val), (u64)&";
   else
     pre += " bpf_probe_read(&_val, sizeof(_val), (u64)&";
@@ -621,7 +634,7 @@ bool ProbeVisitor::VisitArraySubscriptExpr(ArraySubscriptExpr *E) {
     return true;
 
   pre = "({ typeof(" + E->getType().getAsString() + ") _val; __builtin_memset(&_val, 0, sizeof(_val));";
-  if (has_overlap_kuaddr_)
+  if (cannot_fall_back_safely)
     pre += " bpf_probe_read_kernel(&_val, sizeof(_val), (u64)((";
   else
     pre += " bpf_probe_read(&_val, sizeof(_val), (u64)((";
@@ -718,7 +731,7 @@ DiagnosticBuilder ProbeVisitor::error(SourceLocation loc, const char (&fmt)[N]) 
 BTypeVisitor::BTypeVisitor(ASTContext &C, BFrontendAction &fe)
     : C(C), diag_(C.getDiagnostics()), fe_(fe), rewriter_(fe.rewriter()), out_(llvm::errs()) {
   const char **calling_conv_regs = get_call_conv();
-  has_overlap_kuaddr_ = calling_conv_regs == calling_conv_regs_s390x;
+  cannot_fall_back_safely = (calling_conv_regs == calling_conv_regs_s390x || calling_conv_regs == calling_conv_regs_riscv64);
 }
 
 void BTypeVisitor::genParamDirectAssign(FunctionDecl *D, string& preamble,
@@ -760,7 +773,7 @@ void BTypeVisitor::genParamIndirectAssign(FunctionDecl *D, string& preamble,
       size_t d = idx - 1;
       const char *reg = calling_conv_regs[d];
       preamble += "\n " + text + ";";
-      if (has_overlap_kuaddr_)
+      if (cannot_fall_back_safely)
         preamble += " bpf_probe_read_kernel";
       else
         preamble += " bpf_probe_read";
@@ -811,10 +824,23 @@ bool BTypeVisitor::VisitFunctionDecl(FunctionDecl *D) {
   if (fe_.is_rewritable_ext_func(D)) {
     current_fn_ = string(D->getName());
     string bd = rewriter_.getRewrittenText(expansionRange(D->getSourceRange()));
-    fe_.func_src_.set_src(current_fn_, bd);
+    auto func_info = fe_.prog_func_info_.add_func(current_fn_);
+    if (!func_info) {
+      // We should only reach add_func above once per function seen, but the
+      // BPF_PROG-helper using macros in export/helpers.h (KFUNC_PROBE ..
+      // LSM_PROBE) break this logic. TODO: adjust export/helpers.h to not
+      // do so and bail out here, or find a better place to do add_func
+      func_info = fe_.prog_func_info_.get_func(current_fn_);
+      //error(GET_BEGINLOC(D), "redefinition of existing function");
+      //return false;
+    }
+    func_info->src_ = bd;
     fe_.func_range_[current_fn_] = expansionRange(D->getSourceRange());
-    string attr = string("__attribute__((section(\"") + BPF_FN_PREFIX + D->getName().str() + "\")))\n";
-    rewriter_.InsertText(real_start_loc, attr);
+    if (!D->getAttr<SectionAttr>()) {
+      string attr = string("__attribute__((section(\"") + BPF_FN_PREFIX +
+                    D->getName().str() + "\")))\n";
+      rewriter_.InsertText(real_start_loc, attr);
+    }
     if (D->param_size() > MAX_CALLING_CONV_REGS + 1) {
       error(GET_BEGINLOC(D->getParamDecl(MAX_CALLING_CONV_REGS + 1)),
             "too many arguments, bcc only supports in-register parameters");
@@ -1689,13 +1715,12 @@ void BTypeConsumer::HandleTranslationUnit(ASTContext &Context) {
 
 }
 
-BFrontendAction::BFrontendAction(llvm::raw_ostream &os, unsigned flags,
-                                 TableStorage &ts, const std::string &id,
-                                 const std::string &main_path,
-                                 FuncSource &func_src, std::string &mod_src,
-                                 const std::string &maps_ns,
-                                 fake_fd_map_def &fake_fd_map,
-                                 std::map<std::string, std::vector<std::string>> &perf_events)
+BFrontendAction::BFrontendAction(
+    llvm::raw_ostream &os, unsigned flags, TableStorage &ts,
+    const std::string &id, const std::string &main_path,
+    ProgFuncInfo &prog_func_info, std::string &mod_src,
+    const std::string &maps_ns, fake_fd_map_def &fake_fd_map,
+    std::map<std::string, std::vector<std::string>> &perf_events)
     : os_(os),
       flags_(flags),
       ts_(ts),
@@ -1703,7 +1728,7 @@ BFrontendAction::BFrontendAction(llvm::raw_ostream &os, unsigned flags,
       maps_ns_(maps_ns),
       rewriter_(new Rewriter),
       main_path_(main_path),
-      func_src_(func_src),
+      prog_func_info_(prog_func_info),
       mod_src_(mod_src),
       next_fake_fd_(-1),
       fake_fd_map_(fake_fd_map),
@@ -1781,7 +1806,9 @@ void BFrontendAction::EndSourceFileAction() {
   for (auto func : func_range_) {
     auto f = func.first;
     string bd = rewriter_->getRewrittenText(func_range_[f]);
-    func_src_.set_src_rewritten(f, bd);
+    auto fn = prog_func_info_.get_func(f);
+    if (fn)
+      fn->src_rewritten_ = bd;
   }
   rewriter_->getEditBuffer(rewriter_->getSourceMgr().getMainFileID()).write(os_);
   os_.flush();

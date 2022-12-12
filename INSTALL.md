@@ -12,6 +12,7 @@
   - [Amazon Linux 1](#amazon-linux-1---binary)
   - [Amazon Linux 2](#amazon-linux-2---binary)
   - [Alpine](#alpine---binary)
+  - [WSL](#wslwindows-subsystem-for-linux---binary)
 * [Source](#source)
   - [libbpf Submodule](#libbpf-submodule)
   - [Debian](#debian---source)
@@ -270,6 +271,29 @@ sudo docker run --rm -it --privileged \
   alpine:3.12
 ```
 
+## WSL(Windows Subsystem for Linux) - Binary
+
+### Install dependencies
+The compiling depends on the headers and lib of linux kernel module which was not found in wsl distribution packages repo. We have to compile the kernel moudle manually.
+```bash
+apt-get install flex bison libssl-dev libelf-dev dwarves
+```
+### Install packages
+```
+cp Microsoft/config-wsl .config
+make oldconfig && make prepare
+make scripts
+make modules && make modules_install
+# if your kernel version is 4.19.y
+mv /lib/modules/x.y.z-microsoft-standard+ /lib/modules/x.y.z-microsoft-standard 
+````
+Then you can install bcc tools package according your distribution.
+
+If you met some problems, try to 
+```
+sudo mount -t debugfs debugfs /sys/kernel/debug
+```
+
 # Source
 
 ## libbpf Submodule
@@ -337,12 +361,17 @@ sudo apt-get update
 sudo apt-get -y install bison build-essential cmake flex git libedit-dev \
   libllvm6.0 llvm-6.0-dev libclang-6.0-dev python zlib1g-dev libelf-dev libfl-dev python3-distutils
 
-# For Eoan (19.10) or Focal (20.04.1 LTS)
+# For Focal (20.04.1 LTS)
 sudo apt install -y bison build-essential cmake flex git libedit-dev \
-  libllvm7 llvm-7-dev libclang-7-dev python zlib1g-dev libelf-dev libfl-dev python3-distutils
-  
-# For Hirsute (21.04)  or Impish (21.10)
-sudo apt install -y bison build-essential cmake flex git libedit-dev   libllvm11 llvm-11-dev libclang-11-dev python zlib1g-dev libelf-dev libfl-dev python3-distutils
+  libllvm12 llvm-12-dev libclang-12-dev python zlib1g-dev libelf-dev libfl-dev python3-distutils
+
+# For Hirsute (21.04) or Impish (21.10)
+sudo apt install -y bison build-essential cmake flex git libedit-dev \
+libllvm11 llvm-11-dev libclang-11-dev python3 zlib1g-dev libelf-dev libfl-dev python3-distutils
+
+# For Jammy (22.04)
+sudo apt install -y bison build-essential cmake flex git libedit-dev \
+libllvm14 llvm-14-dev libclang-14-dev python3 zlib1g-dev libelf-dev libfl-dev python3-distutils
 
 # For other versions
 sudo apt-get -y install bison build-essential cmake flex git libedit-dev \
@@ -387,12 +416,12 @@ mkdir bcc-build
 cd bcc-build/
 
 ## here llvm should always link shared library
-cmake ../bcc -DCMAKE_INSTALL_PREFIX=/usr -DENABLE_LLVM_SHARED=1  
+cmake ../bcc -DCMAKE_INSTALL_PREFIX=/usr -DENABLE_LLVM_SHARED=1
 make -j10
 make install 
 
 ```
-after install , you may add bcc directory to your $PATH, which you can add to ~/.bashrc
+after install, you may add bcc directory to your $PATH, which you can add to ~/.bashrc
 ```
 bcctools=/usr/share/bcc/tools
 bccexamples=/usr/share/bcc/examples
@@ -501,23 +530,23 @@ sudo yum install -y luajit luajit-devel  # for Lua support
 You could compile LLVM from source code
 
 ```
-curl  -LO  http://releases.llvm.org/7.0.1/llvm-7.0.1.src.tar.xz
-curl  -LO  http://releases.llvm.org/7.0.1/cfe-7.0.1.src.tar.xz
-tar -xf cfe-7.0.1.src.tar.xz
-tar -xf llvm-7.0.1.src.tar.xz
+curl -LO http://releases.llvm.org/10.0.0/llvm-10.0.0.src.tar.xz
+curl -LO http://releases.llvm.org/10.0.0/cfe-10.0.0.src.tar.xz
+tar -xf cfe-10.0.0.src.tar.xz
+tar -xf llvm-10.0.0.src.tar.xz
 
 mkdir clang-build
 mkdir llvm-build
 
 cd llvm-build
 cmake3 -G "Unix Makefiles" -DLLVM_TARGETS_TO_BUILD="BPF;X86" \
-  -DCMAKE_BUILD_TYPE=Release ../llvm-7.0.1.src
+  -DCMAKE_BUILD_TYPE=Release ../llvm-10.0.0.src
 make
 sudo make install
 
 cd ../clang-build
 cmake3 -G "Unix Makefiles" -DLLVM_TARGETS_TO_BUILD="BPF;X86" \
-  -DCMAKE_BUILD_TYPE=Release ../cfe-7.0.1.src
+  -DCMAKE_BUILD_TYPE=Release ../cfe-10.0.0.src
 make
 sudo make install
 cd ..
@@ -528,8 +557,8 @@ or install from centos-release-scl
 ```
 yum install -y centos-release-scl
 yum-config-manager --enable rhel-server-rhscl-7-rpms
-yum install -y devtoolset-7 llvm-toolset-7 llvm-toolset-7-llvm-devel llvm-toolset-7-llvm-static llvm-toolset-7-clang-devel
-source scl_source enable devtoolset-7 llvm-toolset-7
+yum install -y devtoolset-7 llvm-toolset-10 llvm-toolset-10-llvm-devel llvm-toolset-10-llvm-static llvm-toolset-10-clang-devel
+source scl_source enable devtoolset-7 llvm-toolset-10
 ```
 
 For permanently enable scl environment, please check https://access.redhat.com/solutions/527703.

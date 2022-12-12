@@ -6,6 +6,7 @@
 #include <bpf/bpf_tracing.h>
 #include "biolatency.h"
 #include "bits.bpf.h"
+#include "core_fixes.bpf.h"
 
 #define MAX_ENTRIES	10240
 
@@ -31,7 +32,6 @@ struct {
 	__uint(max_entries, MAX_ENTRIES);
 	__type(key, struct request *);
 	__type(value, u64);
-	__uint(map_flags, BPF_F_NO_PREALLOC);
 } start SEC(".maps");
 
 static struct hist initial_hist;
@@ -41,7 +41,6 @@ struct {
 	__uint(max_entries, MAX_ENTRIES);
 	__type(key, struct hist_key);
 	__type(value, struct hist);
-	__uint(map_flags, BPF_F_NO_PREALLOC);
 } hists SEC(".maps");
 
 static __always_inline
@@ -53,7 +52,7 @@ int trace_rq_start(struct request *rq, int issue)
 	u64 ts = bpf_ktime_get_ns();
 
 	if (filter_dev) {
-		struct gendisk *disk = BPF_CORE_READ(rq, rq_disk);
+		struct gendisk *disk = get_disk(rq);
 		u32 dev;
 
 		dev = disk ? MKDEV(BPF_CORE_READ(disk, major),
@@ -76,7 +75,7 @@ int block_rq_insert(u64 *ctx)
 	 * from TP_PROTO(struct request_queue *q, struct request *rq)
 	 * to TP_PROTO(struct request *rq)
 	 */
-	if (LINUX_KERNEL_VERSION <= KERNEL_VERSION(5, 10, 0))
+	if (LINUX_KERNEL_VERSION < KERNEL_VERSION(5, 11, 0))
 		return trace_rq_start((void *)ctx[1], false);
 	else
 		return trace_rq_start((void *)ctx[0], false);
@@ -93,7 +92,7 @@ int block_rq_issue(u64 *ctx)
 	 * from TP_PROTO(struct request_queue *q, struct request *rq)
 	 * to TP_PROTO(struct request *rq)
 	 */
-	if (LINUX_KERNEL_VERSION <= KERNEL_VERSION(5, 10, 0))
+	if (LINUX_KERNEL_VERSION < KERNEL_VERSION(5, 11, 0))
 		return trace_rq_start((void *)ctx[1], true);
 	else
 		return trace_rq_start((void *)ctx[0], true);
@@ -119,7 +118,7 @@ int BPF_PROG(block_rq_complete, struct request *rq, int error,
 		goto cleanup;
 
 	if (targ_per_disk) {
-		struct gendisk *disk = BPF_CORE_READ(rq, rq_disk);
+		struct gendisk *disk = get_disk(rq);
 
 		hkey.dev = disk ? MKDEV(BPF_CORE_READ(disk, major),
 					BPF_CORE_READ(disk, first_minor)) : 0;
