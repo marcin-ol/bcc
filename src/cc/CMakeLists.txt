@@ -123,7 +123,7 @@ set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${llvm_lib_exclude_f
 
 # bcc_common_libs_for_a for archive libraries
 # bcc_common_libs_for_s for shared libraries
-set(bcc_common_libs b_frontend clang_frontend
+set(bcc_common_libs clang_frontend
   -Wl,--whole-archive ${clang_libs} ${llvm_libs} -Wl,--no-whole-archive)
 if (LIBDEBUGINFOD_FOUND)
   list(APPEND bcc_common_libs ${LIBDEBUGINFOD_LIBRARIES})
