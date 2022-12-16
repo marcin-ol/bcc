@@ -215,7 +215,7 @@ int ClangLoader::parse(
     has_kpath_source = kernel_path_info.first;
     kpath = kdir + "/" + kernel_path_info.second;
   }
-
+#ifndef BCC_CLOADER_KERNEL_HEADERLESS
   // If all attempts to obtain kheaders fail, check for kheaders.tar.xz in sysfs
   // Checking just for kpath existence is unsufficient, since it can refer to
   // leftover build directory without headers present anymore.
@@ -230,7 +230,7 @@ int ClangLoader::parse(
       std::cout <<  "or installing the kernel development package for your running kernel version.\n";
     }
   }
-
+#endif
   if (flags_ & DEBUG_PREPROCESSOR)
     std::cout << "Running from kernel directory at: " << kpath.c_str() << "\n";
 
