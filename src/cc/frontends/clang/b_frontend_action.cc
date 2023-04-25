@@ -51,10 +51,14 @@ const char *calling_conv_syscall_regs_x86[] = {
 const char *calling_conv_regs_ppc[] = {"gpr[3]", "gpr[4]", "gpr[5]",
                                        "gpr[6]", "gpr[7]", "gpr[8]"};
 
-const char *calling_conv_regs_s390x[] = {"gprs[2]", "gprs[3]", "gprs[4]",
+const char *calling_conv_regs_s390x[] = { "gprs[2]", "gprs[3]", "gprs[4]",
+					 "gprs[5]", "gprs[6]" };
+const char *calling_conv_syscall_regs_s390x[] = { "orig_gpr2", "gprs[3]", "gprs[4]",
 					 "gprs[5]", "gprs[6]" };
 
 const char *calling_conv_regs_arm64[] = {"regs[0]", "regs[1]", "regs[2]",
+                                       "regs[3]", "regs[4]", "regs[5]"};
+const char *calling_conv_syscall_regs_arm64[] = {"orig_x0", "regs[1]", "regs[2]",
                                        "regs[3]", "regs[4]", "regs[5]"};
 
 const char *calling_conv_regs_mips[] = {"regs[4]", "regs[5]", "regs[6]",
@@ -78,9 +82,13 @@ void *get_call_conv_cb(bcc_arch_t arch, bool for_syscall)
       break;
     case BCC_ARCH_S390X:
       ret = calling_conv_regs_s390x;
+      if (for_syscall)
+        ret = calling_conv_syscall_regs_s390x;
       break;
     case BCC_ARCH_ARM64:
       ret = calling_conv_regs_arm64;
+      if (for_syscall)
+        ret = calling_conv_syscall_regs_arm64;
       break;
     case BCC_ARCH_MIPS:
       ret = calling_conv_regs_mips;
@@ -106,6 +114,13 @@ const char **get_call_conv(bool for_syscall = false) {
 
   ret = (const char **)run_arch_callback(get_call_conv_cb, for_syscall);
   return ret;
+}
+
+const char *pt_regs_syscall_regs(void) {
+  const char **calling_conv_regs;
+  // Equivalent of PT_REGS_SYSCALL_REGS(ctx) ((struct pt_regs *)PT_REGS_PARM1(ctx))
+  calling_conv_regs = (const char **)run_arch_callback(get_call_conv_cb, false);
+  return calling_conv_regs[0];
 }
 
 /* Use resolver only once per translation */
@@ -209,7 +224,7 @@ class ProbeChecker : public RecursiveASTVisitor<ProbeChecker> {
 
     if (!track_helpers_)
       return false;
-    if (VarDecl *V = dyn_cast<VarDecl>(E->getCalleeDecl()))
+    if (VarDecl *V = dyn_cast_or_null<VarDecl>(E->getCalleeDecl()))
       needs_probe_ = V->getName() == "bpf_get_current_task";
     return false;
   }
@@ -421,8 +436,12 @@ bool ProbeVisitor::TraverseStmt(Stmt *S) {
 }
 
 bool ProbeVisitor::VisitCallExpr(CallExpr *Call) {
+  Decl *decl = Call->getCalleeDecl();
+  if (decl == nullptr)
+      return true;
+
   // Skip bpf_probe_read for the third argument if it is an AddrOf.
-  if (VarDecl *V = dyn_cast<VarDecl>(Call->getCalleeDecl())) {
+  if (VarDecl *V = dyn_cast<VarDecl>(decl)) {
     if (V->getName() == "bpf_probe_read" && Call->getNumArgs() >= 3) {
       const Expr *E = Call->getArg(2)->IgnoreParenCasts();
       whitelist_.insert(E);
@@ -430,7 +449,7 @@ bool ProbeVisitor::VisitCallExpr(CallExpr *Call) {
     }
   }
 
-  if (FunctionDecl *F = dyn_cast<FunctionDecl>(Call->getCalleeDecl())) {
+  if (FunctionDecl *F = dyn_cast<FunctionDecl>(decl)) {
     if (F->hasBody()) {
       unsigned i = 0;
       for (auto arg : Call->arguments()) {
@@ -517,9 +536,9 @@ bool ProbeVisitor::VisitUnaryOperator(UnaryOperator *E) {
   string pre, post;
   pre = "({ typeof(" + E->getType().getAsString() + ") _val; __builtin_memset(&_val, 0, sizeof(_val));";
   if (cannot_fall_back_safely)
-    pre += " bpf_probe_read_kernel(&_val, sizeof(_val), (u64)";
+    pre += " bpf_probe_read_kernel(&_val, sizeof(_val), (void *)";
   else
-    pre += " bpf_probe_read(&_val, sizeof(_val), (u64)";
+    pre += " bpf_probe_read(&_val, sizeof(_val), (void *)";
   post = "); _val; })";
   rewriter_.ReplaceText(expansionLoc(E->getOperatorLoc()), 1, pre);
   rewriter_.InsertTextAfterToken(expansionLoc(GET_ENDLOC(sub)), post);
@@ -581,9 +600,9 @@ bool ProbeVisitor::VisitMemberExpr(MemberExpr *E) {
   string pre, post;
   pre = "({ typeof(" + E->getType().getAsString() + ") _val; __builtin_memset(&_val, 0, sizeof(_val));";
   if (cannot_fall_back_safely)
-    pre += " bpf_probe_read_kernel(&_val, sizeof(_val), (u64)&";
+    pre += " bpf_probe_read_kernel(&_val, sizeof(_val), (void *)&";
   else
-    pre += " bpf_probe_read(&_val, sizeof(_val), (u64)&";
+    pre += " bpf_probe_read(&_val, sizeof(_val), (void *)&";
   post = rhs + "); _val; })";
   rewriter_.InsertText(expansionLoc(GET_BEGINLOC(E)), pre);
   rewriter_.ReplaceText(expansionRange(SourceRange(member, GET_ENDLOC(E))), post);
@@ -635,9 +654,9 @@ bool ProbeVisitor::VisitArraySubscriptExpr(ArraySubscriptExpr *E) {
 
   pre = "({ typeof(" + E->getType().getAsString() + ") _val; __builtin_memset(&_val, 0, sizeof(_val));";
   if (cannot_fall_back_safely)
-    pre += " bpf_probe_read_kernel(&_val, sizeof(_val), (u64)((";
+    pre += " bpf_probe_read_kernel(&_val, sizeof(_val), (void *)((";
   else
-    pre += " bpf_probe_read(&_val, sizeof(_val), (u64)((";
+    pre += " bpf_probe_read(&_val, sizeof(_val), (void *)((";
   if (isMemberDereference(base)) {
     pre += "&";
     // If the base of the array subscript is a member dereference, we'll rewrite
@@ -747,8 +766,8 @@ void BTypeVisitor::genParamDirectAssign(FunctionDecl *D, string& preamble,
       arg->addAttr(UnavailableAttr::CreateImplicit(C, "ptregs"));
       size_t d = idx - 1;
       const char *reg = calling_conv_regs[d];
-      preamble += " " + text + " = " + fn_args_[0]->getName().str() + "->" +
-                  string(reg) + ";";
+      preamble += " " + text + " = (" + arg->getType().getAsString() + ")" +
+                  fn_args_[0]->getName().str() + "->" + string(reg) + ";";
     }
   }
 }
@@ -762,9 +781,9 @@ void BTypeVisitor::genParamIndirectAssign(FunctionDecl *D, string& preamble,
 
     if (idx == 0) {
       new_ctx = "__" + arg->getName().str();
-      preamble += " struct pt_regs * " + new_ctx + " = " +
+      preamble += " struct pt_regs * " + new_ctx + " = (void *)" +
                   arg->getName().str() + "->" +
-                  string(calling_conv_regs[0]) + ";";
+                  string(pt_regs_syscall_regs()) + ";";
     } else {
       // Move the args into a preamble section where the same params are
       // declared and initialized from pt_regs.
@@ -799,7 +818,7 @@ void BTypeVisitor::rewriteFuncParam(FunctionDecl *D) {
     // For __x64_sys_* syscalls, this is always true, but we guard
     // it in case of "syscall__" for other architectures.
     if (is_syscall) {
-      preamble += "#if defined(CONFIG_ARCH_HAS_SYSCALL_WRAPPER) && !defined(__s390x__)\n";
+      preamble += "#if defined(CONFIG_ARCH_HAS_SYSCALL_WRAPPER)\n";
       genParamIndirectAssign(D, preamble, calling_conv_regs);
       preamble += "\n#else\n";
       genParamDirectAssign(D, preamble, calling_conv_regs);
@@ -957,7 +976,7 @@ bool BTypeVisitor::VisitCallExpr(CallExpr *Call) {
           string arg0 = rewriter_.getRewrittenText(expansionRange(Call->getArg(0)->getSourceRange()));
           string args_other = rewriter_.getRewrittenText(expansionRange(SourceRange(GET_BEGINLOC(Call->getArg(1)),
                                                            GET_ENDLOC(Call->getArg(2)))));
-          txt = "bpf_perf_event_output(" + arg0 + ", bpf_pseudo_fd(1, " + fd + ")";
+          txt = "bpf_perf_event_output(" + arg0 + ", (void *)bpf_pseudo_fd(1, " + fd + ")";
           txt += ", CUR_CPU_IDENTIFIER, " + args_other + ")";
 
           // e.g.
@@ -986,7 +1005,7 @@ bool BTypeVisitor::VisitCallExpr(CallExpr *Call) {
           string meta_len = rewriter_.getRewrittenText(expansionRange(Call->getArg(3)->getSourceRange()));
           txt = "bpf_perf_event_output(" +
             skb + ", " +
-            "bpf_pseudo_fd(1, " + fd + "), " +
+            "(void *)bpf_pseudo_fd(1, " + fd + "), " +
             "((__u64)" + skb_len + " << 32) | BPF_F_CURRENT_CPU, " +
             meta + ", " +
             meta_len + ");";
@@ -1006,12 +1025,12 @@ bool BTypeVisitor::VisitCallExpr(CallExpr *Call) {
           string keyp = rewriter_.getRewrittenText(expansionRange(Call->getArg(1)->getSourceRange()));
           string flag = rewriter_.getRewrittenText(expansionRange(Call->getArg(2)->getSourceRange()));
           txt = "bpf_" + string(memb_name) + "(" + ctx + ", " +
-            "bpf_pseudo_fd(1, " + fd + "), " + keyp + ", " + flag + ");";
+            "(void *)bpf_pseudo_fd(1, " + fd + "), " + keyp + ", " + flag + ");";
         } else if (memb_name == "ringbuf_output") {
           string name = string(Ref->getDecl()->getName());
           string args = rewriter_.getRewrittenText(expansionRange(SourceRange(GET_BEGINLOC(Call->getArg(0)),
                                                            GET_ENDLOC(Call->getArg(2)))));
-          txt = "bpf_ringbuf_output(bpf_pseudo_fd(1, " + fd + ")";
+          txt = "bpf_ringbuf_output((void *)bpf_pseudo_fd(1, " + fd + ")";
           txt += ", " + args + ")";
 
           // e.g.
@@ -1033,7 +1052,7 @@ bool BTypeVisitor::VisitCallExpr(CallExpr *Call) {
         } else if (memb_name == "ringbuf_reserve") {
           string name = string(Ref->getDecl()->getName());
           string arg0 = rewriter_.getRewrittenText(expansionRange(Call->getArg(0)->getSourceRange()));
-          txt = "bpf_ringbuf_reserve(bpf_pseudo_fd(1, " + fd + ")";
+          txt = "bpf_ringbuf_reserve((void *)bpf_pseudo_fd(1, " + fd + ")";
           txt += ", " + arg0 + ", 0)"; // Flags in reserve are meaningless
         } else if (memb_name == "ringbuf_discard") {
           string name = string(Ref->getDecl()->getName());

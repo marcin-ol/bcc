@@ -19,6 +19,7 @@
 #define PERF_BUFFER_PAGES	16
 #define PERF_POLL_TIMEOUT_MS	100
 #define warn(...) fprintf(stderr, __VA_ARGS__)
+#define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 
 static volatile sig_atomic_t exiting = 0;
 
@@ -165,7 +166,7 @@ static void handle_event(void *ctx, int cpu, void *data, __u32 data_sz)
 	time(&t);
 	tm = localtime(&t);
 	strftime(ts, sizeof(ts), "%H:%M:%S", tm);
-	if (signal_name)
+	if (signal_name && e->sig < ARRAY_SIZE(sig_name))
 		printf("%-8s %-7d %-16s %-9s %-7d %-6d\n",
 		       ts, e->pid, e->comm, sig_name[e->sig], e->tpid, e->ret);
 	else
@@ -194,7 +195,6 @@ int main(int argc, char **argv)
 	if (err)
 		return err;
 
-	libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
 	libbpf_set_print(libbpf_print_fn);
 
 	obj = sigsnoop_bpf__open();

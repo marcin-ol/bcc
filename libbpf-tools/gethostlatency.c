@@ -136,7 +136,8 @@ static int get_libc_path(char *path)
 		if (strchr(buf, '/') != buf)
 			continue;
 		filename = strrchr(buf, '/') + 1;
-		if (sscanf(filename, "libc-%f.so", &version) == 1) {
+		if (sscanf(filename, "libc-%f.so", &version) == 1 ||
+		    sscanf(filename, "libc.so.%f", &version) == 1) {
 			memcpy(path, buf, strlen(buf));
 			fclose(f);
 			return 0;
@@ -233,7 +234,6 @@ int main(int argc, char **argv)
 	if (err)
 		return err;
 
-	libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
 	libbpf_set_print(libbpf_print_fn);
 
 	err = ensure_core_btf(&open_opts);

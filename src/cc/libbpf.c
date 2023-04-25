@@ -17,19 +17,23 @@
 #define _GNU_SOURCE
 #endif
 
+#include "libbpf.h"
+
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
+#include <libgen.h>
 #include <limits.h>
 #include <linux/bpf.h>
 #include <linux/bpf_common.h>
+#include <linux/if_alg.h>
 #include <linux/if_packet.h>
-#include <linux/types.h>
 #include <linux/perf_event.h>
 #include <linux/pkt_cls.h>
 #include <linux/rtnetlink.h>
 #include <linux/sched.h>
+#include <linux/types.h>
 #include <linux/unistd.h>
 #include <linux/version.h>
 #include <net/ethernet.h>
@@ -38,7 +42,6 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <libgen.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/resource.h>
@@ -46,9 +49,8 @@
 #include <sys/types.h>
 #include <sys/vfs.h>
 #include <unistd.h>
-#include <linux/if_alg.h>
 
-#include "libbpf.h"
+#include "bcc_zip.h"
 #include "perf_reader.h"
 
 // TODO: Remove this when CentOS 6 support is not needed anymore
@@ -308,10 +310,14 @@ static struct bpf_helper helpers[] = {
   {"dynptr_read", "5.19"},
   {"dynptr_write", "5.19"},
   {"dynptr_data", "5.19"},
-  {"tcp_raw_gen_syncookie_ipv4", "5.20"},
-  {"tcp_raw_gen_syncookie_ipv6", "5.20"},
-  {"tcp_raw_check_syncookie_ipv4", "5.20"},
-  {"tcp_raw_check_syncookie_ipv6", "5.20"},
+  {"tcp_raw_gen_syncookie_ipv4", "6.0"},
+  {"tcp_raw_gen_syncookie_ipv6", "6.0"},
+  {"tcp_raw_check_syncookie_ipv4", "6.0"},
+  {"tcp_raw_check_syncookie_ipv6", "6.0"},
+  {"ktime_get_tai_ns", "6.1"},
+  {"user_ringbuf_drain", "6.1"},
+  {"cgrp_storage_get", "6.2"},
+  {"cgrp_storage_delete", "6.2"},
 };
 
 static uint64_t ptr_to_u64(void *ptr)
@@ -1037,9 +1043,21 @@ static int bpf_try_perf_event_open_with_probe(const char *name, uint64_t offs,
                  PERF_FLAG_FD_CLOEXEC);
 }
 
+#define DEBUGFS_TRACEFS "/sys/kernel/debug/tracing"
+#define TRACEFS "/sys/kernel/tracing"
+
+static const char *get_tracefs_path()
+{
+  if (access(DEBUGFS_TRACEFS, F_OK) == 0) {
+    return DEBUGFS_TRACEFS;
+  }
+  return TRACEFS;
+}
+
+
 // When a valid Perf Event FD provided through pfd, it will be used to enable
 // and attach BPF program to the event, and event_path will be ignored.
-// Otherwise, event_path is expected to contain the path to the event in debugfs
+// Otherwise, event_path is expected to contain the path to the event in tracefs
 // and it will be used to open the Perf Event FD.
 // In either case, if the attach partially failed (such as issue with the
 // ioctl operations), the **caller** need to clean up the Perf Event FD, either
@@ -1051,7 +1069,7 @@ static int bpf_attach_tracing_event(int progfd, const char *event_path, int pid,
   ssize_t bytes;
   char buf[PATH_MAX];
   struct perf_event_attr attr = {};
-  // Caller did not provided a valid Perf Event FD. Create one with the debugfs
+  // Caller did not provide a valid Perf Event FD. Create one with the tracefs
   // event path provided.
   if (*pfd < 0) {
     snprintf(buf, sizeof(buf), "%s/id", event_path);
@@ -1100,7 +1118,7 @@ static int bpf_attach_tracing_event(int progfd, const char *event_path, int pid,
   return 0;
 }
 
-/* Creates an [uk]probe using debugfs.
+/* Creates an [uk]probe using tracefs.
  * On success, the path to the probe is placed in buf (which is assumed to be of size PATH_MAX).
  */
 static int create_probe_event(char *buf, const char *ev_name,
@@ -1112,7 +1130,7 @@ static int create_probe_event(char *buf, const char *ev_name,
   char ev_alias[256];
   bool is_kprobe = strncmp("kprobe", event_type, 6) == 0;
 
-  snprintf(buf, PATH_MAX, "/sys/kernel/debug/tracing/%s_events", event_type);
+  snprintf(buf, PATH_MAX, "%s/%s_events", get_tracefs_path(), event_type);
   kfd = open(buf, O_WRONLY | O_APPEND, 0);
   if (kfd < 0) {
     fprintf(stderr, "%s: open(%s): %s\n", __func__, buf,
@@ -1157,7 +1175,7 @@ static int create_probe_event(char *buf, const char *ev_name,
     goto error;
   }
   close(kfd);
-  snprintf(buf, PATH_MAX, "/sys/kernel/debug/tracing/events/%ss/%s",
+  snprintf(buf, PATH_MAX, "%s/events/%ss/%s", get_tracefs_path(),
            event_type, ev_alias);
   return 0;
 error:
@@ -1172,7 +1190,7 @@ static int bpf_attach_probe(int progfd, enum bpf_probe_attach_type attach_type,
                             uint32_t ref_ctr_offset)
 {
   int kfd, pfd = -1;
-  char buf[PATH_MAX], fname[256];
+  char buf[PATH_MAX], fname[256], kprobe_events[PATH_MAX];
   bool is_kprobe = strncmp("kprobe", event_type, 6) == 0;
 
   if (maxactive <= 0)
@@ -1183,14 +1201,14 @@ static int bpf_attach_probe(int progfd, enum bpf_probe_attach_type attach_type,
 
   // If failed, most likely Kernel doesn't support the perf_kprobe PMU
   // (e12f03d "perf/core: Implement the 'perf_kprobe' PMU") yet.
-  // Try create the event using debugfs.
+  // Try create the event using tracefs.
   if (pfd < 0) {
     if (create_probe_event(buf, ev_name, attach_type, config1, offset,
                            event_type, pid, maxactive) < 0)
       goto error;
 
     // If we're using maxactive, we need to check that the event was created
-    // under the expected name.  If debugfs doesn't support maxactive yet
+    // under the expected name.  If tracefs doesn't support maxactive yet
     // (kernel < 4.12), the event is created under a different name; we need to
     // delete that event and start again without maxactive.
     if (is_kprobe && maxactive > 0 && attach_type == BPF_PROBE_RETURN) {
@@ -1199,12 +1217,11 @@ static int bpf_attach_probe(int progfd, enum bpf_probe_attach_type attach_type,
         goto error;
       }
       if (access(fname, F_OK) == -1) {
+        snprintf(kprobe_events, PATH_MAX, "%s/kprobe_events", get_tracefs_path());
         // Deleting kprobe event with incorrect name.
-        kfd = open("/sys/kernel/debug/tracing/kprobe_events",
-                   O_WRONLY | O_APPEND, 0);
+        kfd = open(kprobe_events, O_WRONLY | O_APPEND, 0);
         if (kfd < 0) {
-          fprintf(stderr, "open(/sys/kernel/debug/tracing/kprobe_events): %s\n",
-                  strerror(errno));
+          fprintf(stderr, "open(%s): %s\n", kprobe_events, strerror(errno));
           return -1;
         }
         snprintf(fname, sizeof(fname), "-:kprobes/%s_0", ev_name);
@@ -1246,10 +1263,42 @@ int bpf_attach_kprobe(int progfd, enum bpf_probe_attach_type attach_type,
                           fn_offset, -1, maxactive, 0);
 }
 
+static int _find_archive_path_and_offset(const char *entry_path,
+                                         char out_path[PATH_MAX],
+                                         uint64_t *offset) {
+  const char *separator = strstr(entry_path, "!/");
+  if (separator == NULL || (separator - entry_path) >= PATH_MAX) {
+    return -1;
+  }
+
+  struct bcc_zip_entry entry;
+  struct bcc_zip_archive *archive =
+      bcc_zip_archive_open_and_find(entry_path, &entry);
+  if (archive == NULL) {
+    return -1;
+  }
+  if (entry.compression) {
+    bcc_zip_archive_close(archive);
+    return -1;
+  }
+
+  strncpy(out_path, entry_path, separator - entry_path);
+  out_path[separator - entry_path] = 0;
+  *offset += entry.data_offset;
+
+  bcc_zip_archive_close(archive);
+  return 0;
+}
+
 int bpf_attach_uprobe(int progfd, enum bpf_probe_attach_type attach_type,
                       const char *ev_name, const char *binary_path,
                       uint64_t offset, pid_t pid, uint32_t ref_ctr_offset)
 {
+  char archive_path[PATH_MAX];
+  if (access(binary_path, F_OK) != 0 &&
+      _find_archive_path_and_offset(binary_path, archive_path, &offset) == 0) {
+    binary_path = archive_path;
+  }
 
   return bpf_attach_probe(progfd, attach_type,
                           ev_name, binary_path, "uprobe",
@@ -1271,7 +1320,7 @@ static int bpf_detach_probe(const char *ev_name, const char *event_type)
    * the %s_bcc_%d line in [k,u]probe_events. If the event is not found,
    * it is safe to skip the cleaning up process (write -:... to the file).
    */
-  snprintf(buf, sizeof(buf), "/sys/kernel/debug/tracing/%s_events", event_type);
+  snprintf(buf, sizeof(buf), "%s/%s_events", get_tracefs_path(), event_type);
   fp = fopen(buf, "r");
   if (!fp) {
     fprintf(stderr, "open(%s): %s\n", buf, strerror(errno));
@@ -1296,7 +1345,7 @@ static int bpf_detach_probe(const char *ev_name, const char *event_type)
   if (!found_event)
     return 0;
 
-  snprintf(buf, sizeof(buf), "/sys/kernel/debug/tracing/%s_events", event_type);
+  snprintf(buf, sizeof(buf), "%s/%s_events", get_tracefs_path(), event_type);
   kfd = open(buf, O_WRONLY | O_APPEND, 0);
   if (kfd < 0) {
     fprintf(stderr, "open(%s): %s\n", buf, strerror(errno));
@@ -1340,8 +1389,7 @@ int bpf_attach_tracepoint(int progfd, const char *tp_category,
   char buf[256];
   int pfd = -1;
 
-  snprintf(buf, sizeof(buf), "/sys/kernel/debug/tracing/events/%s/%s",
-           tp_category, tp_name);
+  snprintf(buf, sizeof(buf), "%s/events/%s/%s", get_tracefs_path(), tp_category, tp_name);
   if (bpf_attach_tracing_event(progfd, buf, -1 /* PID */, &pfd) == 0)
     return pfd;
 
@@ -1381,12 +1429,27 @@ bool bpf_has_kernel_btf(void)
   return true;
 }
 
+static int find_member_by_name(struct btf *btf, const struct btf_type *btf_type, const char *field_name) {
+  const struct btf_member *btf_member = btf_members(btf_type);
+  int i;
+
+  for (i = 0; i < btf_vlen(btf_type); i++, btf_member++) {
+    const char *name = btf__name_by_offset(btf, btf_member->name_off);
+    if (!strcmp(name, field_name)) {
+      return 1;
+    } else if (name[0] == '\0') {
+      if (find_member_by_name(btf, btf__type_by_id(btf, btf_member->type), field_name))
+        return 1;
+    }
+  }
+  return 0;
+}
+
 int kernel_struct_has_field(const char *struct_name, const char *field_name)
 {
   const struct btf_type *btf_type;
-  const struct btf_member *btf_member;
   struct btf *btf;
-  int i, ret, btf_id;
+  int ret, btf_id;
 
   btf = btf__load_vmlinux_btf();
   ret = libbpf_get_error(btf);
@@ -1400,14 +1463,7 @@ int kernel_struct_has_field(const char *struct_name, const char *field_name)
   }
 
   btf_type = btf__type_by_id(btf, btf_id);
-  btf_member = btf_members(btf_type);
-  for (i = 0; i < btf_vlen(btf_type); i++, btf_member++) {
-    if (!strcmp(btf__name_by_offset(btf, btf_member->name_off), field_name)) {
-      ret = 1;
-      goto cleanup;
-    }
-  }
-  ret = 0;
+  ret = find_member_by_name(btf, btf_type, field_name);
 
 cleanup:
   btf__free(btf);

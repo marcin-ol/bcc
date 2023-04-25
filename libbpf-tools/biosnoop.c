@@ -202,7 +202,6 @@ int main(int argc, char **argv)
 	if (err)
 		return err;
 
-	libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
 	libbpf_set_print(libbpf_print_fn);
 
 	obj = biosnoop_bpf__open();
@@ -334,10 +333,10 @@ int main(int argc, char **argv)
 			fprintf(stderr, "error polling perf buffer: %s\n", strerror(-err));
 			goto cleanup;
 		}
-		if (env.duration && get_ktime_ns() > time_end)
-			goto cleanup;
 		/* reset err to return 0 if exiting */
 		err = 0;
+		if (env.duration && get_ktime_ns() > time_end)
+			break;
 	}
 
 cleanup:

@@ -158,7 +158,6 @@ int main(int argc, char **argv)
 	if (err)
 		return err;
 
-	libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
 	libbpf_set_print(libbpf_print_fn);
 
 	err = ensure_core_btf(&open_opts);
@@ -184,6 +183,7 @@ int main(int argc, char **argv)
 			obj->rodata->target_sports[i++] = port_num;
 			port = strtok(NULL, ",");
 		}
+		obj->rodata->filter_sport = true;
 	}
 
 	if (target_dports) {
@@ -194,6 +194,7 @@ int main(int argc, char **argv)
 			obj->rodata->target_dports[i++] = port_num;
 			port = strtok(NULL, ",");
 		}
+		obj->rodata->filter_dport = true;
 	}
 
 	err = tcplife_bpf__load(obj);

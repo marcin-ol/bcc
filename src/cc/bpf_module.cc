@@ -17,10 +17,16 @@
 
 #include <fcntl.h>
 #include <linux/bpf.h>
+#if LLVM_MAJOR_VERSION <= 16
 #include <llvm-c/Transforms/IPO.h>
+#endif
 #include <llvm/ExecutionEngine/MCJIT.h>
 #include <llvm/ExecutionEngine/SectionMemoryManager.h>
+#if LLVM_MAJOR_VERSION >= 16
+#include <llvm/IRPrinter/IRPrintingPasses.h>
+#else
 #include <llvm/IR/IRPrintingPasses.h>
+#endif
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 
@@ -39,7 +45,9 @@
 #include <llvm/Object/SymbolSize.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Transforms/IPO.h>
+#if LLVM_MAJOR_VERSION <= 16
 #include <llvm/Transforms/IPO/PassManagerBuilder.h>
+#endif
 #include <net/if.h>
 #include <sys/stat.h>
 #include <unistd.h>

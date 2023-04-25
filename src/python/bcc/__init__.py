@@ -44,7 +44,10 @@ def _get_num_open_probes():
     global _num_open_probes
     return _num_open_probes
 
-TRACEFS = "/sys/kernel/debug/tracing"
+DEBUGFS = "/sys/kernel/debug"
+TRACEFS = os.path.join(DEBUGFS, "tracing")
+if not os.path.exists(TRACEFS):
+    TRACEFS = "/sys/kernel/tracing"
 
 # Debug flags
 
@@ -292,7 +295,7 @@ class BPF(object):
 
     _probe_repl = re.compile(b"[^a-zA-Z0-9_]")
     _sym_caches = {}
-    _bsymcache =  lib.bcc_buildsymcache_new()
+    _bsymcache = lib.bcc_buildsymcache_new()
 
     _auto_includes = {
         "linux/time.h": ["time"],
@@ -686,7 +689,7 @@ class BPF(object):
 
     @staticmethod
     def get_kprobe_functions(event_re):
-        blacklist_file = "%s/../kprobes/blacklist" % TRACEFS
+        blacklist_file = "%s/kprobes/blacklist" % DEBUGFS
         try:
             with open(blacklist_file, "rb") as blacklist_f:
                 blacklist = set([line.rstrip().split()[1] for line in blacklist_f])
@@ -745,7 +748,7 @@ class BPF(object):
                 # Exclude all gcc 8's extra .cold functions
                 elif re.match(b'^.*\.cold(\.\d+)?$', fn):
                     continue
-                if (t.lower() in [b't', b'w']) and re.match(event_re, fn) \
+                if (t.lower() in [b't', b'w']) and re.fullmatch(event_re, fn) \
                     and fn not in blacklist:
                     fns.append(fn)
         return set(fns)     # Some functions may appear more than once

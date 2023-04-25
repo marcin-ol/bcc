@@ -67,7 +67,14 @@ Kernel compile flags can usually be checked by looking at `/proc/config.gz` or
 
 ## Debian - Binary
 
-`bcc` and its tools are available in the standard Debian main repository, from the source package [bpfcc](https://packages.debian.org/source/sid/bpfcc) under the names `bpfcc-tools`, `python-bpfcc`, `libbpfcc` and `libbpfcc-dev`.
+`bcc` and its tools are available in the standard Debian main repository, from the source package [bpfcc](https://packages.debian.org/source/sid/bpfcc) under the names `bpfcc-tools`, `python3-bpfcc`, `libbpfcc` and `libbpfcc-dev`.
+
+To install:
+
+```bash
+echo deb http://cloudfront.debian.net/debian sid main >> /etc/apt/sources.list
+sudo apt-get install -y bpfcc-tools libbpfcc libbpfcc-dev linux-headers-$(uname -r)
+```
 
 ## Ubuntu - Binary
 
@@ -274,19 +281,34 @@ sudo docker run --rm -it --privileged \
 ## WSL(Windows Subsystem for Linux) - Binary
 
 ### Install dependencies
-The compiling depends on the headers and lib of linux kernel module which was not found in wsl distribution packages repo. We have to compile the kernel moudle manually.
+The compiling depends on the headers and lib of linux kernel module which was not found in wsl distribution packages repo. We have to compile the kernel module manually.
 ```bash
 apt-get install flex bison libssl-dev libelf-dev dwarves
 ```
 ### Install packages
+
+First, you will need to checkout the WSL2 Linux kernel git repository:
+```
+KERNEL_VERSION=$(uname -r | cut -d '-' -f 1)
+git clone --depth 1 git@github.com:microsoft/WSL2-Linux-Kernel.git -b linux-msft-wsl-$KERNEL_VERSION
+cd WSL2-Linux-Kernel
+```
+
+Then compile and install:
 ```
 cp Microsoft/config-wsl .config
 make oldconfig && make prepare
 make scripts
-make modules && make modules_install
-# if your kernel version is 4.19.y
-mv /lib/modules/x.y.z-microsoft-standard+ /lib/modules/x.y.z-microsoft-standard 
+make modules
+sudo make modules_install
 ````
+
+After install the module you will need to change the name of the directory to remove the '+' at the end
+
+````
+mv /lib/modules/$KERNEL_VERSION-microsoft-standard-WSL2+/ /lib/modules/$KERNEL_VERSION-microsoft-standard-WSL2
+````
+
 Then you can install bcc tools package according your distribution.
 
 If you met some problems, try to 
@@ -327,7 +349,7 @@ sudo apt-get install arping bison clang-format cmake dh-python \
   dpkg-dev pkg-kde-tools ethtool flex inetutils-ping iperf \
   libbpf-dev libclang-dev libclang-cpp-dev libedit-dev libelf-dev \
   libfl-dev libzip-dev linux-libc-dev llvm-dev libluajit-5.1-dev \
-  luajit python3-netaddr python3-pyroute2 python3-distutils python3
+  luajit python3-netaddr python3-pyroute2 python3-setuptools python3
 ```
 
 #### Install and compile BCC
@@ -359,23 +381,23 @@ sudo apt-get update
 
 # For Bionic (18.04 LTS)
 sudo apt-get -y install bison build-essential cmake flex git libedit-dev \
-  libllvm6.0 llvm-6.0-dev libclang-6.0-dev python zlib1g-dev libelf-dev libfl-dev python3-distutils
+  libllvm6.0 llvm-6.0-dev libclang-6.0-dev python zlib1g-dev libelf-dev libfl-dev python3-setuptools
 
 # For Focal (20.04.1 LTS)
 sudo apt install -y bison build-essential cmake flex git libedit-dev \
-  libllvm12 llvm-12-dev libclang-12-dev python zlib1g-dev libelf-dev libfl-dev python3-distutils
+  libllvm12 llvm-12-dev libclang-12-dev python zlib1g-dev libelf-dev libfl-dev python3-setuptools
 
 # For Hirsute (21.04) or Impish (21.10)
 sudo apt install -y bison build-essential cmake flex git libedit-dev \
-libllvm11 llvm-11-dev libclang-11-dev python3 zlib1g-dev libelf-dev libfl-dev python3-distutils
+libllvm11 llvm-11-dev libclang-11-dev python3 zlib1g-dev libelf-dev libfl-dev python3-setuptools
 
 # For Jammy (22.04)
 sudo apt install -y bison build-essential cmake flex git libedit-dev \
-libllvm14 llvm-14-dev libclang-14-dev python3 zlib1g-dev libelf-dev libfl-dev python3-distutils
+libllvm14 llvm-14-dev libclang-14-dev python3 zlib1g-dev libelf-dev libfl-dev python3-setuptools
 
 # For other versions
 sudo apt-get -y install bison build-essential cmake flex git libedit-dev \
-  libllvm3.7 llvm-3.7-dev libclang-3.7-dev python zlib1g-dev libelf-dev python3-distutils
+  libllvm3.7 llvm-3.7-dev libclang-3.7-dev python zlib1g-dev libelf-dev python3-setuptools
 
 # For Lua support
 sudo apt-get -y install luajit luajit-5.1-dev

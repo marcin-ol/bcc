@@ -6,10 +6,12 @@
 /biopattern
 /biosnoop
 /biostacks
+/biotop
 /bitesize
 /btrfsdist
 /btrfsslower
 /cachestat
+/capable
 /cpudist
 /cpufreq
 /drsnoop
@@ -24,10 +26,12 @@
 /funclatency
 /gethostlatency
 /hardirqs
+/javagc
 /killsnoop
 /klockstat
 /ksnoop
 /llcstat
+/memleak
 /mdflush
 /mountsnoop
 /nfsdist
@@ -51,7 +55,10 @@
 /tcplife
 /tcptracer
 /tcprtt
+/tcpstates
 /tcpsynbl
+/tcptop
 /vfsstat
+/wakeuptime
 /xfsdist
 /xfsslower
