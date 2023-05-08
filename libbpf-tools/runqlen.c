@@ -16,6 +16,7 @@
 #include <bpf/bpf.h>
 #include "runqlen.h"
 #include "runqlen.skel.h"
+#include "btf_helpers.h"
 #include "trace_helpers.h"
 
 #define max(x, y) ({				 \
@@ -28,8 +29,9 @@ struct env {
 	bool per_cpu;
 	bool runqocc;
 	bool timestamp;
+	bool host;
 	time_t interval;
-	bool freq;
+	int freq;
 	int times;
 	bool verbose;
 } env = {
@@ -41,7 +43,8 @@ struct env {
 static volatile bool exiting;
 
 const char *argp_program_version = "runqlen 0.1";
-const char *argp_program_bug_address = "<bpf@vger.kernel.org>";
+const char *argp_program_bug_address =
+	"https://github.com/iovisor/bcc/tree/master/libbpf-tools";
 const char argp_program_doc[] =
 "Summarize scheduler run queue length as a histogram.\n"
 "\n"
@@ -53,6 +56,7 @@ const char argp_program_doc[] =
 "    runqlen -T 1    # 1s summaries and timestamps\n"
 "    runqlen -O      # report run queue occupancy\n"
 "    runqlen -C      # show each CPU separately\n"
+"    runqlen -H      # show nr_running from host's rq instead of cfs_rq\n"
 "    runqlen -f 199  # sample at 199HZ\n";
 
 static const struct argp_option opts[] = {
@@ -61,6 +65,8 @@ static const struct argp_option opts[] = {
 	{ "runqocc", 'O', NULL, 0, "Report run queue occupancy" },
 	{ "timestamp", 'T', NULL, 0, "Include timestamp on output" },
 	{ "verbose", 'v', NULL, 0, "Verbose debug output" },
+	{ "host", 'H', NULL, 0, "Report nr_running from host's rq" },
+	{ NULL, 'h', NULL, OPTION_HIDDEN, "Show the full help" },
 	{},
 };
 
@@ -69,6 +75,9 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 	static int pos_args;
 
 	switch (key) {
+	case 'h':
+		argp_state_help(state, stderr, ARGP_HELP_STD_HELP);
+		break;
 	case 'v':
 		env.verbose = true;
 		break;
@@ -80,6 +89,9 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 		break;
 	case 'T':
 		env.timestamp = true;
+		break;
+	case 'H':
+		env.host = true;
 		break;
 	case 'f':
 		errno = 0;
@@ -140,10 +152,8 @@ static int open_and_attach_perf_event(int freq, struct bpf_program *prog,
 			return -1;
 		}
 		links[i] = bpf_program__attach_perf_event(prog, fd);
-		if (libbpf_get_error(links[i])) {
-			fprintf(stderr, "failed to attach perf event on cpu: "
-				"%d\n", i);
-			links[i] = NULL;
+		if (!links[i]) {
+			fprintf(stderr, "failed to attach perf event on cpu: %d\n", i);
 			close(fd);
 			return -1;
 		}
@@ -152,8 +162,7 @@ static int open_and_attach_perf_event(int freq, struct bpf_program *prog,
 	return 0;
 }
 
-int libbpf_print_fn(enum libbpf_print_level level,
-		    const char *format, va_list args)
+static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va_list args)
 {
 	if (level == LIBBPF_DEBUG && !env.verbose)
 		return 0;
@@ -169,12 +178,13 @@ static struct hist zero;
 
 static void print_runq_occupancy(struct runqlen_bpf__bss *bss)
 {
-	__u64 samples, idle = 0, queued = 0;
 	struct hist hist;
 	int slot, i = 0;
 	float runqocc;
 
 	do {
+		__u64 samples, idle = 0, queued = 0;
+
 		hist = bss->hists[i];
 		bss->hists[i] = zero;
 		for (slot = 0; slot < MAX_SLOTS; slot++) {
@@ -211,6 +221,7 @@ static void print_linear_hists(struct runqlen_bpf__bss *bss)
 
 int main(int argc, char **argv)
 {
+	LIBBPF_OPTS(bpf_object_open_opts, open_opts);
 	static const struct argp argp = {
 		.options = opts,
 		.parser = parse_arg,
@@ -229,12 +240,6 @@ int main(int argc, char **argv)
 
 	libbpf_set_print(libbpf_print_fn);
 
-	err = bump_memlock_rlimit();
-	if (err) {
-		fprintf(stderr, "failed to increase rlimit: %d\n", err);
-		return 1;
-	}
-
 	nr_cpus = libbpf_num_possible_cpus();
 	if (nr_cpus < 0) {
 		printf("failed to get # of possible cpus: '%s'!\n",
@@ -247,7 +252,13 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	obj = runqlen_bpf__open();
+	err = ensure_core_btf(&open_opts);
+	if (err) {
+		fprintf(stderr, "failed to fetch necessary BTF for CO-RE: %s\n", strerror(-err));
+		return 1;
+	}
+
+	obj = runqlen_bpf__open_opts(&open_opts);
 	if (!obj) {
 		fprintf(stderr, "failed to open BPF object\n");
 		return 1;
@@ -255,10 +266,16 @@ int main(int argc, char **argv)
 
 	/* initialize global data (filtering options) */
 	obj->rodata->targ_per_cpu = env.per_cpu;
+	obj->rodata->targ_host = env.host;
 
 	err = runqlen_bpf__load(obj);
 	if (err) {
 		fprintf(stderr, "failed to load BPF object: %d\n", err);
+		goto cleanup;
+	}
+
+	if (!obj->bss) {
+		fprintf(stderr, "Memory-mapping BPF maps is supported starting from Linux 5.7, please upgrade.\n");
 		goto cleanup;
 	}
 
@@ -294,6 +311,7 @@ cleanup:
 	for (i = 0; i < nr_cpus; i++)
 		bpf_link__destroy(links[i]);
 	runqlen_bpf__destroy(obj);
+	cleanup_core_btf(&open_opts);
 
 	return err != 0;
 }

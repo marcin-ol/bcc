@@ -31,7 +31,7 @@ if len(sys.argv) == 2:
 if len(sys.argv) == 3:
     if "-S" in sys.argv:
         # XDP_FLAGS_SKB_MODE
-        flags |= 2 << 0
+        flags |= BPF.XDP_FLAGS_SKB_MODE
 
     if "-S" == sys.argv[1]:
         device = sys.argv[2]
@@ -180,7 +180,7 @@ while 1:
         time.sleep(1)
     except KeyboardInterrupt:
         print("Removing filter from device")
-        break;
+        break
 
 if mode == BPF.XDP:
     b.remove_xdp(device, flags)

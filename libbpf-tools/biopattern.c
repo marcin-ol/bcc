@@ -12,6 +12,7 @@
 #include <bpf/bpf.h>
 #include "biopattern.h"
 #include "biopattern.skel.h"
+#include "btf_helpers.h"
 #include "trace_helpers.h"
 
 static struct env {
@@ -28,7 +29,8 @@ static struct env {
 static volatile bool exiting;
 
 const char *argp_program_version = "biopattern 0.1";
-const char *argp_program_bug_address = "<bpf@vger.kernel.org>";
+const char *argp_program_bug_address =
+	"https://github.com/iovisor/bcc/tree/master/libbpf-tools";
 const char argp_program_doc[] =
 "Show block device I/O pattern.\n"
 "\n"
@@ -44,6 +46,7 @@ static const struct argp_option opts[] = {
 	{ "timestamp", 'T', NULL, 0, "Include timestamp on output" },
 	{ "disk",  'd', "DISK",  0, "Trace this disk only" },
 	{ "verbose", 'v', NULL, 0, "Verbose debug output" },
+	{ NULL, 'h', NULL, OPTION_HIDDEN, "Show the full help" },
 	{},
 };
 
@@ -52,6 +55,9 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 	static int pos_args;
 
 	switch (key) {
+	case 'h':
+		argp_state_help(state, stderr, ARGP_HELP_STD_HELP);
+		break;
 	case 'v':
 		env.verbose = true;
 		break;
@@ -92,8 +98,7 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 	return 0;
 }
 
-int libbpf_print_fn(enum libbpf_print_level level,
-		    const char *format, va_list args)
+static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va_list args)
 {
 	if (level == LIBBPF_DEBUG && !env.verbose)
 		return 0;
@@ -154,6 +159,7 @@ static int print_map(struct bpf_map *counters, struct partitions *partitions)
 
 int main(int argc, char **argv)
 {
+	LIBBPF_OPTS(bpf_object_open_opts, open_opts);
 	struct partitions *partitions = NULL;
 	const struct partition *partition;
 	static const struct argp argp = {
@@ -170,13 +176,13 @@ int main(int argc, char **argv)
 
 	libbpf_set_print(libbpf_print_fn);
 
-	err = bump_memlock_rlimit();
+	err = ensure_core_btf(&open_opts);
 	if (err) {
-		fprintf(stderr, "failed to increase rlimit: %d\n", err);
+		fprintf(stderr, "failed to fetch necessary BTF for CO-RE: %s\n", strerror(-err));
 		return 1;
 	}
 
-	obj = biopattern_bpf__open();
+	obj = biopattern_bpf__open_opts(&open_opts);
 	if (!obj) {
 		fprintf(stderr, "failed to open BPF object\n");
 		return 1;
@@ -195,6 +201,7 @@ int main(int argc, char **argv)
 			fprintf(stderr, "invaild partition name: not exist\n");
 			goto cleanup;
 		}
+		obj->rodata->filter_dev = true;
 		obj->rodata->targ_dev = partition->dev;
 	}
 
@@ -234,6 +241,7 @@ int main(int argc, char **argv)
 cleanup:
 	biopattern_bpf__destroy(obj);
 	partitions__free(partitions);
+	cleanup_core_btf(&open_opts);
 
 	return err != 0;
 }
