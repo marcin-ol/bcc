@@ -138,7 +138,7 @@ set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${llvm_lib_exclude_f
 set(bcc_common_libs clang_frontend
   -Wl,--whole-archive ${clang_libs} ${llvm_libs} -Wl,--no-whole-archive)
 if (LIBLZMA_FOUND)
-  list(APPEND bcc_common_libs ${LIBLZMA_LIBRARIES} -Wl,--no-whole-archive)
+  list(APPEND bcc_common_libs ${LIBLZMA_LIBRARIES})
 endif (LIBLZMA_FOUND)
 if (LIBDEBUGINFOD_FOUND)
   list(APPEND bcc_common_libs ${LIBDEBUGINFOD_LIBRARIES})
