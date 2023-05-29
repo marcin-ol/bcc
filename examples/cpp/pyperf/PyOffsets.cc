@@ -234,7 +234,7 @@ extern const struct struct_offsets kPy311OffsetConfig = {
         .ob_type = 8
     },
     .String = {
-        .data = 48,
+        .data = 48, // sizeof(PyASCIIObject), which is an offset to string data
         .size = -1,
     },
     .PyTypeObject = {
