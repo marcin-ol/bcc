@@ -47,6 +47,7 @@ enum error_code {
   ERROR_THREAD_STATE_HEAD_NULL = 10,
   ERROR_BAD_THREAD_STATE = 11,
   ERROR_CALL_FAILED = 12,
+  ERROR_TSTATE_CFRAME_IS_NULL = 13,
 };
 
 /**
@@ -480,6 +481,10 @@ found:
     bpf_probe_read_user(
       &cframe, sizeof(cframe),
       (void *)(state->thread_state + state->offsets.PyThreadState.cframe));
+    if (cframe == 0) {
+      event->error_code = ERROR_TSTATE_CFRAME_IS_NULL;
+      goto submit;
+    }
     bpf_probe_read_user(
       &state->frame_ptr, sizeof(state->frame_ptr),
       (void *)(cframe + state->offsets.PyCFrame.current_frame));

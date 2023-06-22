@@ -194,8 +194,9 @@ extern const struct struct_offsets kPy310OffsetConfig = {
         .ob_type = 8
     },
     .String = {
-        .data = 48,
-        .size = -1,                // offsetof(PyVarObject, ob_size)
+        // see https://github.com/python/cpython/blob/3.10/Include/cpython/unicodeobject.h#L82-L84
+        .data = 48, // sizeof(PyASCIIObject), which is an offset to string data
+        .size = -1, // offsetof(PyVarObject, ob_size)
     },
     .PyTypeObject = {
         .tp_name = 24
@@ -234,6 +235,7 @@ extern const struct struct_offsets kPy311OffsetConfig = {
         .ob_type = 8
     },
     .String = {
+        // see https://github.com/python/cpython/blob/3.11/Include/cpython/unicodeobject.h#L69-L71
         .data = 48, // sizeof(PyASCIIObject), which is an offset to string data
         .size = -1,
     },
